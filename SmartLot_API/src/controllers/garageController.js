@@ -137,7 +137,7 @@ router.put('/:id', requireRole(1, 4), async (req, res) => {
     const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias } = req.body;
     if (nombre !== undefined && !isValidString(nombre)) throwError('El nombre no puede estar vacío.', 400);
     if (id_sede !== undefined && !isValidId(String(id_sede))) throwError('El id_sede debe ser un número válido.', 400);
-    if (capacidad !== undefined && !isValidPositiveNumber(capacidad)) throwError('La capacidad debe ser un número positivo.', 400);
+    if (capacidad !== undefined && (typeof capacidad !== 'number' || capacidad < 0)) throwError('La capacidad debe ser un número mayor o igual a 0.', 400);
     if (estado !== undefined && typeof estado !== 'boolean') throwError('El estado debe ser un valor booleano (true o false).', 400);
     if (hora_apertura !== undefined && hora_apertura !== null && !isValidTime(hora_apertura)) throwError('La hora de apertura debe tener formato HH:MM.', 400);
     if (hora_cierre !== undefined && hora_cierre !== null && !isValidTime(hora_cierre)) throwError('La hora de cierre debe tener formato HH:MM.', 400);
