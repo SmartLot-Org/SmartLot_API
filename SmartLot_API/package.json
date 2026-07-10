@@ -11,7 +11,16 @@
     "db-test": "node ./src/database/db.js",
     "apptest": "node ./src/appTest.js",
     "app": "node ./src/app.js",
-    "nodemailer": "set NODE_TLS_REJECT_UNAUTHORIZED=0&&node ./scripts/check_nodemailer.cjs"
+    "nodemailer": "set NODE_TLS_REJECT_UNAUTHORIZED=0&&node ./scripts/check_nodemailer.cjs",
+    "pre-deploy": "node ./scripts/pre-deploy.cjs",
+    "check:env": "node ./scripts/check-env.cjs",
+    "check:syntax": "node ./scripts/check-syntax.cjs",
+    "check:deps": "node ./scripts/check-deps.cjs",
+    "check:security": "node ./scripts/check-security.cjs",
+    "check:structure": "node ./scripts/check-structure.cjs",
+    "check:routes": "node ./scripts/check-routes.cjs",
+    "check:db": "node ./scripts/check-db.cjs",
+    "check:port": "node ./scripts/check-port.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

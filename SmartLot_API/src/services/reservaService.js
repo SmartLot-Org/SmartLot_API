@@ -17,16 +17,16 @@ export default class ReservaService {
         this.sedeService = new SedeService();
     }
 
-    getAllAsync = async () => await this.repo.getAllAsync();
+    getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
 
-    getByIdAsync = async (id) => await this.repo.getByIdAsync(id);
+    getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
     getActivasByUsuarioAsync = async (id_usuario) => await this.repo.getActivasByUsuarioAsync(id_usuario);
 
-    getByUsuarioAsync = async (id_usuario) => await this.repo.getByUsuarioAsync(id_usuario);
+    getByUsuarioAsync = async (id_usuario, requestingUser = null) => await this.repo.getByUsuarioAsync(id_usuario, requestingUser);
 
-    getByUsuarioWithDetailsAsync = async (id_usuario) => {
-        const rows = await this.repo.getByUsuarioWithDetailsAsync(id_usuario);
+    getByUsuarioWithDetailsAsync = async (id_usuario, requestingUser = null) => {
+        const rows = await this.repo.getByUsuarioWithDetailsAsync(id_usuario, requestingUser);
         if (!rows) return null;
 
         return rows.map((r) => {

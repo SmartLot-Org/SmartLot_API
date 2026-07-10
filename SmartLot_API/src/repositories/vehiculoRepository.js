@@ -1,21 +1,35 @@
 // vehiculoRepository.js
 import pool from '../database/db.js';
+import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class VehiculoRepository {
     constructor() {
         console.log('Estoy en: VehiculoRepository.constructor()');
     }
 
-    getAllAsync = async () => {
+    getAllAsync = async (requestingUser = null) => {
         try {
-            const result = await pool.query('SELECT * FROM vehiculos WHERE COALESCE("Borrado", false) = false ORDER BY id');
+            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT v.* FROM vehiculos v
+                 INNER JOIN usuarios u ON u.id = v.id_usuario
+                 WHERE COALESCE(v."Borrado", false) = false ${tenant.sql}
+                 ORDER BY v.id`,
+                [...tenant.params]
+            );
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
-    getByIdAsync = async (id) => {
+    getByIdAsync = async (id, requestingUser = null) => {
         try {
-            const result = await pool.query('SELECT * FROM vehiculos WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT v.* FROM vehiculos v
+                 INNER JOIN usuarios u ON u.id = v.id_usuario
+                 WHERE v.id = $1 AND COALESCE(v."Borrado", false) = false ${tenant.sql}`,
+                [id, ...tenant.params]
+            );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
     }

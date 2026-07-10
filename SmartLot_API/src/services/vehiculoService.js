@@ -11,9 +11,9 @@ export default class VehiculoService {
         this.modeloService = new ModeloService();
     }
 
-    getAllAsync = async () => await this.repo.getAllAsync();
+    getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
     
-    getByIdAsync = async (id) => await this.repo.getByIdAsync(id);
+    getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
     createAsync = async (entity, requestingUser) => {
         const rol = Number(requestingUser.id_rol);
@@ -42,6 +42,18 @@ export default class VehiculoService {
     updateAsync = async (id, entity, requestingUser) => {
         const rol = Number(requestingUser.id_rol);
         if (rol !== 1 && rol !== 4) {
+            // Verificar que el vehículo pertenezca al usuario que lo modifica (IDOR).
+            const current = await this.repo.getByIdAsync(id);
+            if (!current) {
+                const error = new Error('No encontrado: El vehículo con ese ID no existe.');
+                error.statusCode = 404;
+                throw error;
+            }
+            if (Number(current.id_usuario) !== Number(requestingUser.id)) {
+                const error = new Error('No tiene permisos para modificar este vehículo.');
+                error.statusCode = 403;
+                throw error;
+            }
             delete entity.id_usuario;
         }
 

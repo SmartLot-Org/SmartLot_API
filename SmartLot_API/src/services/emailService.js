@@ -42,7 +42,7 @@ export const plantillaBienvenida = (nombre, email) => `
 <body style="${ESTILOS_BASE.replace(/\n\s*/g, ' ')}">
     <div class="container">
         <div class="header">
-            <h1>✨ Bienvenido a SmartLot</h1>
+            <h1>Bienvenido a SmartLot</h1>
             <p>Tu sistema inteligente de gestión de estacionamientos</p>
         </div>
         <div class="body">
@@ -50,7 +50,7 @@ export const plantillaBienvenida = (nombre, email) => `
             <p>Tu cuenta ha sido creada exitosamente. Ya puedes iniciar sesión y comenzar a gestionar tus estacionamientos de forma inteligente.</p>
             <div class="info-box">
                 <p><strong>📧 Correo:</strong> ${email}</p>
-                <p><strong>🔑 Contraseña:</strong> La que registraste al crear tu cuenta</p>
+                <p><strong>🔑 Contraseña:</strong> La que registró la empresa al crear tu cuenta</p>
             </div>
             <p style="text-align:center;">
                 <a href="${process.env.FRONTEND_URL || '#'}/login" class="btn">Iniciar Sesión</a>

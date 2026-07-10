@@ -1,40 +1,57 @@
 // reservaRepository.js
 import pool from '../database/db.js';
+import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class ReservaRepository {
     constructor() {
         console.log('Estoy en: ReservaRepository.constructor()');
     }
 
-    getAllAsync = async () => {
+    getAllAsync = async (requestingUser = null) => {
         try {
-            const result = await pool.query('SELECT * FROM reservas WHERE COALESCE("Borrado", false) = false ORDER BY id');
-            return result.rows;
-        } catch (error) { console.error(error); return null; }
-    }
-
-    getByIdAsync = async (id) => {
-        try {
-            const result = await pool.query('SELECT * FROM reservas WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
-    }
-
-    getByUsuarioAsync = async (id_usuario) => {
-        try {
+            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
-                `SELECT * FROM reservas
-                 WHERE id_usuario = $1
-                   AND COALESCE("Borrado", false) = false
-                 ORDER BY fecha_entrada`,
-                [id_usuario]
+                `SELECT r.* FROM reservas r
+                 INNER JOIN usuarios u ON u.id = r.id_usuario
+                 WHERE COALESCE(r."Borrado", false) = false ${tenant.sql}
+                 ORDER BY r.id`,
+                [...tenant.params]
             );
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
-    getByUsuarioWithDetailsAsync = async (id_usuario) => {
+    getByIdAsync = async (id, requestingUser = null) => {
         try {
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT r.* FROM reservas r
+                 INNER JOIN usuarios u ON u.id = r.id_usuario
+                 WHERE r.id = $1 AND COALESCE(r."Borrado", false) = false ${tenant.sql}`,
+                [id, ...tenant.params]
+            );
+            return result.rows[0] ?? null;
+        } catch (error) { console.error(error); return null; }
+    }
+
+    getByUsuarioAsync = async (id_usuario, requestingUser = null) => {
+        try {
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT r.* FROM reservas r
+                 INNER JOIN usuarios u ON u.id = r.id_usuario
+                 WHERE r.id_usuario = $1
+                   AND COALESCE(r."Borrado", false) = false ${tenant.sql}
+                 ORDER BY r.fecha_entrada`,
+                [id_usuario, ...tenant.params]
+            );
+            return result.rows;
+        } catch (error) { console.error(error); return null; }
+    }
+
+    getByUsuarioWithDetailsAsync = async (id_usuario, requestingUser = null) => {
+        try {
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
                 `SELECT
                     r.id,
@@ -53,14 +70,15 @@ export default class ReservaRepository {
                     v.patente,
                     mo.nombre AS modelo_nombre,
                     ma.nombre AS marca_nombre
-                 FROM reservas r
-                 LEFT JOIN garages g ON r.id_garage = g.id
-                 LEFT JOIN vehiculos v ON r.id_vehiculo = v.id
-                 LEFT JOIN modelos mo ON v.id_modelo = mo.id
-                 LEFT JOIN marcas ma ON mo.id_marca = ma.id
-                  WHERE r.id_usuario = $1
-                  ORDER BY r.fecha_entrada DESC`,
-                [id_usuario]
+                  FROM reservas r
+                  INNER JOIN usuarios u ON u.id = r.id_usuario
+                  LEFT JOIN garages g ON r.id_garage = g.id
+                  LEFT JOIN vehiculos v ON r.id_vehiculo = v.id
+                  LEFT JOIN modelos mo ON v.id_modelo = mo.id
+                  LEFT JOIN marcas ma ON mo.id_marca = ma.id
+                   WHERE r.id_usuario = $1 ${tenant.sql}
+                   ORDER BY r.fecha_entrada DESC`,
+                [id_usuario, ...tenant.params]
             );
             return result.rows;
         } catch (error) { console.error(error); return null; }

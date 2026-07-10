@@ -1,37 +1,42 @@
 // garageRepository.js
 import pool from '../database/db.js';
 import { getDiasSemana } from '../helpers/validatorHelper.js';
+import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class GarageRepository {
     constructor() {
         console.log('Estoy en: GarageRepository.constructor()');
     }
 
-    getAllAsync = async () => {
+    getAllAsync = async (requestingUser = null) => {
         try {
+            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa' });
             const result = await pool.query(`
                 SELECT g.*, COALESCE(
                     (SELECT array_agg(gd.dia ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
                     '{}'::dia_semana[]
                 ) AS dias
                 FROM garages g
-                WHERE COALESCE(g."Borrado", false) = false
+                INNER JOIN sedes s ON s.id = g.id_sede
+                WHERE COALESCE(g."Borrado", false) = false ${tenant.sql}
                 ORDER BY g.id
-            `);
+            `, [...tenant.params]);
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
-    getByIdAsync = async (id) => {
+    getByIdAsync = async (id, requestingUser = null) => {
         try {
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa' });
             const result = await pool.query(`
                 SELECT g.*, COALESCE(
                     (SELECT array_agg(gd.dia ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
                     '{}'::dia_semana[]
                 ) AS dias
                 FROM garages g
-                WHERE g.id = $1 AND COALESCE(g."Borrado", false) = false
-            `, [id]);
+                INNER JOIN sedes s ON s.id = g.id_sede
+                WHERE g.id = $1 AND COALESCE(g."Borrado", false) = false ${tenant.sql}
+            `, [id, ...tenant.params]);
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
     }

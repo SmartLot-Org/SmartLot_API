@@ -6,15 +6,23 @@ export default class EmpresaRepository {
         console.log('Estoy en: EmpresaRepository.constructor()');
     }
 
-    getAllAsync = async () => {
+    getAllAsync = async (requestingUser = null) => {
         try {
+            // Solo el superadmin (rol 4) puede listar todas las empresas.
+            if (requestingUser && Number(requestingUser?.id_rol) !== 4) {
+                return [];
+            }
             const result = await pool.query('SELECT * FROM empresas WHERE COALESCE("Borrado", false) = false ORDER BY id');
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
-    getByIdAsync = async (id) => {
+    getByIdAsync = async (id, requestingUser = null) => {
         try {
+            // Superadmin ve cualquier empresa. El resto solo la propia.
+            if (requestingUser && Number(requestingUser?.id_rol) !== 4 && Number(requestingUser?.id_empresa) !== Number(id)) {
+                return null;
+            }
             const result = await pool.query('SELECT * FROM empresas WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }

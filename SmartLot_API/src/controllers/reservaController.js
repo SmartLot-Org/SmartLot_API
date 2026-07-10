@@ -22,7 +22,7 @@ function throwError(message, statusCode) {
 
 // GET ALL
 router.get('', async (req, res) => {
-    const data = await svc.getAllAsync();
+    const data = await svc.getAllAsync(req.usuario);
     if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
@@ -44,7 +44,14 @@ router.get('/usuario/:id_usuario', async (req, res) => {
     const id_usuario = parseInt(req.params.id_usuario);
     if (isNaN(id_usuario)) throwError('El ID de usuario no es válido.', 400);
 
-    const data = await svc.getByUsuarioWithDetailsAsync(id_usuario);
+    // Verificación de propiedad: solo el propio usuario, un admin o un superadmin
+    // pueden consultar las reservas de un usuario (evita enumeración entre tenants).
+    const rol = Number(req.usuario.id_rol);
+    if (rol !== 1 && rol !== 4 && Number(req.usuario.id) !== id_usuario) {
+        throwError('No tiene permisos para ver las reservas de este usuario.', 403);
+    }
+
+    const data = await svc.getByUsuarioWithDetailsAsync(id_usuario, req.usuario);
     if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
@@ -54,7 +61,7 @@ router.get('/:id', async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const data = await svc.getByIdAsync(id);
+    const data = await svc.getByIdAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });

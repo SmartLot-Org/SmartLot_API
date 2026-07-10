@@ -14,7 +14,7 @@ function throwError(message, statusCode) {
 
 // GET ALL
 router.get('', async (req, res) => {
-    const data = await svc.getAllAsync();
+    const data = await svc.getAllAsync(req.usuario);
     if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
@@ -24,7 +24,7 @@ router.get('/:id', async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const data = await svc.getByIdAsync(id);
+    const data = await svc.getByIdAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });

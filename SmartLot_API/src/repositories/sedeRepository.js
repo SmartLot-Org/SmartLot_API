@@ -1,21 +1,30 @@
 // sedeRepository.js
 import pool from '../database/db.js';
+import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class SedeRepository {
     constructor() {
         console.log('Estoy en: SedeRepository.constructor()');
     }
 
-    getAllAsync = async () => {
+    getAllAsync = async (requestingUser = null) => {
         try {
-            const result = await pool.query('SELECT * FROM sedes WHERE COALESCE("Borrado", false) = false ORDER BY id');
+            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'sedes.id', empresaColumn: 'sedes.id_empresa' });
+            const result = await pool.query(
+                `SELECT * FROM sedes WHERE COALESCE("Borrado", false) = false ${tenant.sql} ORDER BY id`,
+                [...tenant.params]
+            );
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
-    getByIdAsync = async (id) => {
+    getByIdAsync = async (id, requestingUser = null) => {
         try {
-            const result = await pool.query('SELECT * FROM sedes WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'sedes.id', empresaColumn: 'sedes.id_empresa' });
+            const result = await pool.query(
+                `SELECT * FROM sedes WHERE id = $1 AND COALESCE("Borrado", false) = false ${tenant.sql}`,
+                [id, ...tenant.params]
+            );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
     }

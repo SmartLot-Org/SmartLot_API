@@ -1,5 +1,6 @@
 // usuarioRepository.js
 import pool from '../database/db.js';
+import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class UsuarioRepository {
     constructor() {
@@ -49,23 +50,29 @@ export default class UsuarioRepository {
         }
     }
 
-    getAllAsync = async () => {
+    getAllAsync = async (requestingUser = null) => {
         try {
-            const result = await pool.query(`
-                SELECT u.*, 
+            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT u.*,
                     CASE WHEN u.id_rol = 3 THEN ug.id_garage ELSE NULL END as id_garage
-                FROM usuarios u 
-                LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario 
-                WHERE COALESCE(u."Borrado", false) = false 
-                ORDER BY u.id
-            `);
+                 FROM usuarios u
+                 LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
+                 WHERE COALESCE(u."Borrado", false) = false ${tenant.sql}
+                 ORDER BY u.id`,
+                [...tenant.params]
+            );
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
-    getByIdAsync = async (id) => {
+    getByIdAsync = async (id, requestingUser = null) => {
         try {
-            const result = await pool.query('SELECT * FROM usuarios WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT * FROM usuarios u WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
+                [id, ...tenant.params]
+            );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
     }

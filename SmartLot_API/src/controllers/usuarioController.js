@@ -17,7 +17,7 @@ function throwError(message, statusCode) {
 
 // GET ALL (admin o smartlot)
 router.get('', authMiddleware, requireRole(1, 4), async (req, res) => {
-    const data = await svc.getAllAsync();
+    const data = await svc.getAllAsync(req.usuario);
     if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
@@ -27,7 +27,7 @@ router.get('/garage/:id_garage', authMiddleware, requireRole(1, 3, 4), async (re
     const idGarage = parseInt(req.params.id_garage);
     if (isNaN(idGarage)) throwError('El ID de garage proporcionado no es válido.', 400);
 
-    const data = await svc.getGaragistasByGarageIdAsync(idGarage);
+    const data = await svc.getGaragistasByGarageIdAsync(idGarage, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });
@@ -171,7 +171,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
     const esPropio = Number(req.usuario.id) === id;
     if (!esAdminOSmartlot && !esPropio) throwError('No tiene permisos para ver este usuario.', 403);
 
-    const data = await svc.getByIdAsync(id);
+    const data = await svc.getByIdAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });

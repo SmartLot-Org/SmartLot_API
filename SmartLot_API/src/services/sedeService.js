@@ -9,9 +9,9 @@ export default class SedeService {
         this.empresaService = new EmpresaService();
     }
 
-    getAllAsync = async () => await this.repo.getAllAsync();
+    getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
     
-    getByIdAsync = async (id) => await this.repo.getByIdAsync(id);
+    getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
     createAsync = async (entity) => {
         await this._validarRelacionesAsync(entity);

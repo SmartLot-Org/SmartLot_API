@@ -15,7 +15,7 @@ function throwError(message, statusCode) {
 
 // GET ALL
 router.get('', async (req, res) => {
-    const data = await svc.getAllAsync();
+    const data = await svc.getAllAsync(req.usuario);
     if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
@@ -45,7 +45,7 @@ router.get('/:id', async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const data = await svc.getByIdAsync(id);
+    const data = await svc.getByIdAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });
@@ -72,7 +72,7 @@ router.get('/:id/distancia-sede', async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const garage = await svc.getByIdAsync(id);
+    const garage = await svc.getByIdAsync(id, req.usuario);
     if (!garage) {
         console.error(`distancia-sede: garage ${id} no encontrado (usuario ${req.usuario?.id})`);
         throwError('Garage no encontrado.', 404);
@@ -126,7 +126,12 @@ router.post('', requireRole(1, 4), async (req, res) => {
         if (!isValidDiaSemana(dia)) throwError(`El dia "${dia}" no es valido. Use: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.`, 400);
     }
 
-    const data = await svc.createAsync(req.body);
+    // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
+    const safeEntity = {
+        id_sede, nombre, ubicacion, latitud, longitud,
+        capacidad, estado, hora_apertura, hora_cierre, dias
+    };
+    const data = await svc.createAsync(safeEntity);
     if (!data) throwError('Error interno al crear el garage.', 500);
     res.status(201).json(data);
 });
@@ -149,7 +154,12 @@ router.put('/:id', requireRole(1, 4), async (req, res) => {
         }
     }
 
-    const data = await svc.updateAsync(parseInt(req.params.id, 10), req.body);
+    // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
+    const safeEntity = {
+        id_sede, nombre, ubicacion, latitud, longitud,
+        capacidad, estado, hora_apertura, hora_cierre, dias
+    };
+    const data = await svc.updateAsync(parseInt(req.params.id, 10), safeEntity);
     if (!data) throwError('No encontrado: El garage con ese ID no existe.', 404);
     res.status(200).json(data);
 });

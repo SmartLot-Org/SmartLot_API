@@ -32,9 +32,9 @@ export default class UsuarioService {
         return this._reservaServiceInstance;
     }
 
-    getAllAsync = async () => await this.repo.getAllAsync();
+    getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
 
-    getByIdAsync = async (id) => await this.repo.getByIdAsync(id);
+    getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
     getAuditAsync = async () => await this.repo.getAuditAsync();
 
@@ -202,15 +202,15 @@ export default class UsuarioService {
         return version;
     }
 
-    getGaragistasByGarageIdAsync = async (id_garage) => {
-        // Validar que el garage exista
-        const garage = await this.garageService.getByIdAsync(id_garage);
+    getGaragistasByGarageIdAsync = async (id_garage, requestingUser = null) => {
+        // Validar que el garage exista (con filtro de tenant).
+        const garage = await this.garageService.getByIdAsync(id_garage, requestingUser);
         if (!garage) {
             const error = new Error(`El garage no existe.`);
             error.statusCode = 404;
             throw error;
         }
-        return await this.usuarioGarageService.getUsuariosByGarageIdAsync(id_garage);
+        return await this.usuarioGarageService.getUsuariosByGarageIdAsync(id_garage, requestingUser);
     }
 
     createAsync = async (entity) => {
