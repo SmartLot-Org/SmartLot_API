@@ -70,7 +70,11 @@ export default class UsuarioRepository {
         try {
             const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
-                `SELECT * FROM usuarios u WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
+                `SELECT u.*,
+                    CASE WHEN u.id_rol = 3 THEN ug.id_garage ELSE NULL END as id_garage
+                 FROM usuarios u
+                 LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
+                 WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
                 [id, ...tenant.params]
             );
             return result.rows[0] ?? null;
@@ -79,7 +83,14 @@ export default class UsuarioRepository {
 
     getByEmailAsync = async (email) => {
         try {
-            const result = await pool.query('SELECT * FROM usuarios WHERE email = $1 AND COALESCE("Borrado", false) = false', [email]);
+            const result = await pool.query(
+                `SELECT u.*,
+                    CASE WHEN u.id_rol = 3 THEN ug.id_garage ELSE NULL END as id_garage
+                 FROM usuarios u
+                 LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
+                 WHERE u.email = $1 AND COALESCE(u."Borrado", false) = false`,
+                [email]
+            );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
     }

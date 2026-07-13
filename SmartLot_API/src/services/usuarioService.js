@@ -72,7 +72,8 @@ export default class UsuarioService {
             id_rol: usuario.id_rol,
             id_empresa: usuario.id_empresa,
             id_sede: usuario.id_sede,
-            token_version: usuario.token_version
+            token_version: usuario.token_version,
+            ...(usuario.id_garage != null ? { id_garage: usuario.id_garage } : {})
         };
 
         const accessToken = jwt.sign(
@@ -157,7 +158,8 @@ export default class UsuarioService {
                 id_rol: usuario.id_rol,
                 id_empresa: usuario.id_empresa,
                 id_sede: usuario.id_sede,
-                token_version: usuario.token_version
+                token_version: usuario.token_version,
+                ...(usuario.id_garage != null ? { id_garage: usuario.id_garage } : {})
             },
             process.env.JWT_SECRET,
             {
