@@ -19,6 +19,17 @@ export default class ReservaService {
 
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
 
+    getControlAccesoAsync = async (id_garage, fecha, requestingUser) => {
+        await this._validarAccesoGarageAsync(id_garage, requestingUser);
+        const reservas = await this.repo.getControlAccesoAsync(id_garage, fecha, requestingUser);
+        if (!reservas) {
+            const error = new Error('No se pudieron obtener las reservas para control de acceso.');
+            error.statusCode = 500;
+            throw error;
+        }
+        return reservas;
+    }
+
     getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
     getActivasByUsuarioAsync = async (id_usuario) => await this.repo.getActivasByUsuarioAsync(id_usuario);
@@ -246,45 +257,41 @@ export default class ReservaService {
         }
     }
 
-    checkInAsync = async (id) => {
-        const reserva = await this.repo.getByIdAsync(id);
-        if (!reserva) {
-            const error = new Error(`La reserva con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-
-        if (reserva.entro) {
-            const error = new Error(`La reserva con ID ${id} ya registro su ingreso.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (reserva.salio) {
-            const error = new Error(`La reserva con ID ${id} ya registro su salida.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        const ahora = new Date();
-        const fechaEntrada = new Date(reserva.fecha_entrada);
-        const ingresoPermitidoDesde = new Date(fechaEntrada.getTime() - 60 * 60 * 1000);
-
-        if (ahora < ingresoPermitidoDesde) {
-            const error = new Error(`La reserva con ID ${id} todavia no esta habilitada para registrar ingreso.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (ahora > new Date(reserva.fecha_salida)) {
-            const error = new Error(`La reserva con ID ${id} ya supero su horario de salida previsto.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
+    checkInAsync = async (id, patente, requestingUser) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
+
+            const reserva = await this.repo.getByIdForUpdateWithClientAsync(id, client);
+            await this._validarReservaParaAccesoAsync(reserva, id, patente, requestingUser);
+
+            if (reserva.entro) {
+                const error = new Error(`La reserva con ID ${id} ya registro su ingreso.`);
+                error.statusCode = 400;
+                throw error;
+            }
+
+            if (reserva.salio) {
+                const error = new Error(`La reserva con ID ${id} ya registro su salida.`);
+                error.statusCode = 400;
+                throw error;
+            }
+
+            const ahora = new Date();
+            const fechaEntrada = new Date(reserva.fecha_entrada);
+            const ingresoPermitidoDesde = new Date(fechaEntrada.getTime() - 60 * 60 * 1000);
+
+            if (ahora < ingresoPermitidoDesde) {
+                const error = new Error(`La reserva con ID ${id} todavia no esta habilitada para registrar ingreso.`);
+                error.statusCode = 400;
+                throw error;
+            }
+
+            if (ahora > new Date(reserva.fecha_salida)) {
+                const error = new Error(`La reserva con ID ${id} ya supero su horario de salida previsto.`);
+                error.statusCode = 400;
+                throw error;
+            }
 
             const garage = await this.garageService.getByIdForUpdateWithClientAsync(reserva.id_garage, client);
             if (!garage) {
@@ -320,29 +327,25 @@ export default class ReservaService {
         }
     }
 
-    checkOutAsync = async (id) => {
-        const reserva = await this.repo.getByIdAsync(id);
-        if (!reserva) {
-            const error = new Error(`La reserva con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-
-        if (!reserva.entro) {
-            const error = new Error(`La reserva con ID ${id} no puede registrar salida sin haber registrado su ingreso.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (reserva.salio) {
-            const error = new Error(`La reserva con ID ${id} ya registro su salida.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
+    checkOutAsync = async (id, patente, requestingUser) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
+
+            const reserva = await this.repo.getByIdForUpdateWithClientAsync(id, client);
+            await this._validarReservaParaAccesoAsync(reserva, id, patente, requestingUser);
+
+            if (!reserva.entro) {
+                const error = new Error(`La reserva con ID ${id} no puede registrar salida sin haber registrado su ingreso.`);
+                error.statusCode = 400;
+                throw error;
+            }
+
+            if (reserva.salio) {
+                const error = new Error(`La reserva con ID ${id} ya registro su salida.`);
+                error.statusCode = 400;
+                throw error;
+            }
 
             const garage = await this.garageService.getByIdForUpdateWithClientAsync(reserva.id_garage, client);
             if (!garage) {
@@ -372,6 +375,53 @@ export default class ReservaService {
             throw error;
         } finally {
             client.release();
+        }
+    }
+
+    _validarAccesoGarageAsync = async (id_garage, requestingUser) => {
+        const rol = Number(requestingUser?.id_rol);
+        if (rol === 3 && Number(requestingUser?.id_garage) !== Number(id_garage)) {
+            const error = new Error('No tiene permisos para operar este garage.');
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const garage = await this.garageService.getByIdAsync(id_garage, requestingUser);
+        if (!garage) {
+            const error = new Error('El garage no existe o no pertenece a su organizacion.');
+            error.statusCode = 404;
+            throw error;
+        }
+    }
+
+    _validarReservaParaAccesoAsync = async (reserva, id, patente, requestingUser) => {
+        if (!reserva) {
+            const error = new Error(`La reserva con ID ${id} no existe.`);
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (Number(requestingUser?.id_rol) === 3
+            && Number(requestingUser?.id_garage) !== Number(reserva.id_garage)) {
+            const error = new Error('No tiene permisos para operar reservas de otro garage.');
+            error.statusCode = 403;
+            throw error;
+        }
+
+        if (Number(requestingUser?.id_rol) !== 4) {
+            const garageAutorizado = await this.garageService.getByIdAsync(reserva.id_garage, requestingUser);
+            if (!garageAutorizado) {
+                const error = new Error('No tiene permisos para operar reservas de otra organizacion.');
+                error.statusCode = 403;
+                throw error;
+            }
+        }
+
+        const normalizar = (valor) => String(valor ?? '').trim().replace(/[\s-]/g, '').toUpperCase();
+        if (!normalizar(patente) || normalizar(patente) !== normalizar(reserva.patente)) {
+            const error = new Error('La patente ingresada no coincide con el vehiculo de la reserva.');
+            error.statusCode = 400;
+            throw error;
         }
     }
 

@@ -39,6 +39,19 @@ router.get('/disponibilidad-por-hora', async (req, res) => {
     res.status(200).json(data);
 });
 
+// GET CONTROL DE ACCESO (admin, smartlot o garagista del garage)
+router.get('/control-acceso/:id_garage', requireRole(1, 3, 4), async (req, res) => {
+    const idGarage = parseInt(req.params.id_garage, 10);
+    const fecha = String(req.query.fecha ?? '');
+    if (!isValidId(String(idGarage))) throwError('El ID de garage no es valido.', 400);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !isValidDate(`${fecha}T00:00:00`)) {
+        throwError('La fecha es requerida (formato YYYY-MM-DD).', 400);
+    }
+
+    const data = await svc.getControlAccesoAsync(idGarage, fecha, req.usuario);
+    res.status(200).json(data);
+});
+
 // GET BY USER
 router.get('/usuario/:id_usuario', async (req, res) => {
     const id_usuario = parseInt(req.params.id_usuario);
@@ -126,7 +139,7 @@ router.post('/:id/check-in', authMiddleware, requireRole(1, 3, 4), async (req, r
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const data = await svc.checkInAsync(id);
+    const data = await svc.checkInAsync(id, req.body?.patente, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });
@@ -136,7 +149,7 @@ router.post('/:id/check-out', authMiddleware, requireRole(1, 3, 4), async (req, 
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const data = await svc.checkOutAsync(id);
+    const data = await svc.checkOutAsync(id, req.body?.patente, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });

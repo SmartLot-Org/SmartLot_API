@@ -21,6 +21,32 @@ export default class ReservaRepository {
         } catch (error) { console.error(error); return null; }
     }
 
+    getControlAccesoAsync = async (id_garage, fecha, requestingUser) => {
+        try {
+            const tenant = getTenantCondition(requestingUser, 3, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            const result = await pool.query(
+                `SELECT r.*,
+                        CONCAT_WS(' ', u.nombre, u.apellido) AS conductor,
+                        v.patente,
+                        mo.nombre AS modelo_nombre,
+                        ma.nombre AS marca_nombre
+                   FROM reservas r
+                   INNER JOIN usuarios u ON u.id = r.id_usuario
+                   INNER JOIN vehiculos v ON v.id = r.id_vehiculo
+                   LEFT JOIN modelos mo ON mo.id = v.id_modelo
+                   LEFT JOIN marcas ma ON ma.id = mo.id_marca
+                  WHERE r.id_garage = $1
+                    AND COALESCE(r."Borrado", false) = false
+                    AND (r.fecha_entrada::date = $2::date
+                         OR (COALESCE(r.entro, false) = true AND COALESCE(r.salio, false) = false))
+                    ${tenant.sql}
+                  ORDER BY r.fecha_entrada`,
+                [id_garage, fecha, ...tenant.params]
+            );
+            return result.rows;
+        } catch (error) { console.error(error); return null; }
+    }
+
     getByIdAsync = async (id, requestingUser = null) => {
         try {
             const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
@@ -32,6 +58,18 @@ export default class ReservaRepository {
             );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
+    }
+
+    getByIdForUpdateWithClientAsync = async (id, client) => {
+        const result = await client.query(
+            `SELECT r.*, v.patente
+               FROM reservas r
+               INNER JOIN vehiculos v ON v.id = r.id_vehiculo
+              WHERE r.id = $1 AND COALESCE(r."Borrado", false) = false
+              FOR UPDATE OF r`,
+            [id]
+        );
+        return result.rows[0] ?? null;
     }
 
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => {
@@ -214,7 +252,7 @@ export default class ReservaRepository {
 
     registrarIngresoWithClientAsync = async (id, client) => {
         const result = await client.query(
-            'UPDATE reservas SET entro = true WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING *',
+            'UPDATE reservas SET entro = true WHERE id = $1 AND COALESCE(entro, false) = false AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
         return result.rows[0] ?? null;
@@ -237,7 +275,7 @@ export default class ReservaRepository {
 
     registrarSalidaWithClientAsync = async (id, client) => {
         const result = await client.query(
-            'UPDATE reservas SET salio = true WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING *',
+            'UPDATE reservas SET salio = true WHERE id = $1 AND COALESCE(entro, false) = true AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
         return result.rows[0] ?? null;
