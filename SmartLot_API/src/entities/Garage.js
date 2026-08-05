@@ -17,6 +17,9 @@ class Garage {
     hora_cierre;
     Borrado;
     dias;
+    precio_pickup;
+    precio_auto;
+    precio_moto;
 }
 
 export default Garage;

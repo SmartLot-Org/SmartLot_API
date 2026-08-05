@@ -220,7 +220,8 @@ export default class UsuarioService {
 
         // Obtener el rol para verificar si es "garagista"
         const rol = await this.rolService.getByIdAsync(entity.id_rol);
-        const esGaragista = rol && rol.tipo_rol && rol.tipo_rol.toLowerCase() === 'garagista';
+        const tipoRol = rol?.tipo_rol?.toLowerCase();
+        const esGaragista = tipoRol === 'garagista';
 
         // Validaciones si es "garagista"
         if (esGaragista) {
@@ -298,7 +299,7 @@ export default class UsuarioService {
             throw error;
         }
 
-        this._aplicarReglasDeActualizacion(entity, requestingUser, id);
+        await this._aplicarReglasDeActualizacion(entity, requestingUser, id);
 
         // Merge: preservar valores actuales para campos no enviados
         const merged = { ...current, ...entity };
@@ -353,7 +354,7 @@ export default class UsuarioService {
             throw error;
         }
 
-        this._aplicarReglasDeActualizacion({}, requestingUser, id);
+        await this._aplicarReglasDeActualizacion({}, requestingUser, id);
 
         const hash = await bcrypt.hash(contraseña, BCRYPT_ROUNDS);
 
@@ -439,7 +440,7 @@ export default class UsuarioService {
         }
     }
 
-    _aplicarReglasDeActualizacion = (entity, requestingUser, targetId) => {
+    _aplicarReglasDeActualizacion = async (entity, requestingUser, targetId) => {
         const rol = Number(requestingUser.id_rol);
         const esAdmin = rol === 1;
         const esSmartlot = rol === 4;
@@ -457,9 +458,10 @@ export default class UsuarioService {
         }
 
         if (!esPropio && esAdmin && entity.id_rol !== undefined) {
-            const targetRol = Number(entity.id_rol);
-            if (![1, 2, 3].includes(targetRol)) {
-                const error = new Error('Solo puede asignar los roles admin, empleado o garagista.');
+            const targetRol = await this.rolService.getByIdAsync(entity.id_rol);
+            const tipo = targetRol?.tipo_rol?.toLowerCase();
+            if (!['admin', 'cliente', 'empleado', 'garagista', 'dueño_garage'].includes(tipo)) {
+                const error = new Error('No puede asignar el rol indicado.');
                 error.statusCode = 400;
                 throw error;
             }

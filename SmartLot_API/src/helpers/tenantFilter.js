@@ -44,6 +44,13 @@ export const getTenantCondition = (requestingUser, firstParamIndex, columns) => 
         return { sql: '', params: [] };
     }
 
+    if (requestingUser?.tipo_rol?.toLowerCase() === 'dueño_garage' && columns.garageColumn) {
+        return {
+            sql: ` AND EXISTS (SELECT 1 FROM usuario_garage tenant_ug WHERE tenant_ug.id_usuario = $${firstParamIndex} AND tenant_ug.id_garage = ${columns.garageColumn})`,
+            params: [Number(requestingUser.id)],
+        };
+    }
+
     const idSede = requestingUser?.id_sede;
     if (isPositiveNumber(idSede)) {
         return {

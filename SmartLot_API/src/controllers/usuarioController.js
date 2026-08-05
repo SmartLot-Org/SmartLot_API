@@ -23,7 +23,7 @@ router.get('', authMiddleware, requireRole(1, 4), async (req, res) => {
 });
 
 // GET BY GARAGE ID (admin, smartlot o garagista)
-router.get('/garage/:id_garage', authMiddleware, requireRole(1, 3, 4), async (req, res) => {
+router.get('/garage/:id_garage', authMiddleware, requireRole(1, 3, 4, 'dueño_garage'), async (req, res) => {
     const idGarage = parseInt(req.params.id_garage);
     if (isNaN(idGarage)) throwError('El ID de garage proporcionado no es válido.', 400);
 
@@ -179,24 +179,32 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // CREATE (POST) - admin o smartlot
 router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     const { id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, id_garage, activo } = req.body;
-    const rolNumerico = parseInt(id_rol, 10);
-    const esGarajista = rolNumerico === 3;
-    const esSuperadmin = rolNumerico === 4;
-    const esAdmin = rolNumerico === 1;
-
     if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
     if (!isValidString(apellido)) throwError('El apellido es requerido.', 400);
     if (!isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
     if (!isValidPassword(contraseña)) throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
     if (!isValidId(id_rol)) throwError('El id_rol es requerido y debe ser un número válido.', 400);
+    const rolSolicitado = await svc.rolService.getByIdAsync(Number(id_rol));
+    if (!rolSolicitado) throwError('El rol indicado no existe.', 400);
+    const tipoRol = rolSolicitado.tipo_rol?.toLowerCase();
+    const esGaragista = tipoRol === 'garagista';
+    const esDuenoGarage = tipoRol === 'dueño_garage';
+    const esSuperadmin = tipoRol === 'superadmin' || Number(id_rol) === 4;
+    const esAdmin = tipoRol === 'admin' || Number(id_rol) === 1;
 
-    if (esGarajista) {
+    if (esGaragista) {
         if (id_sede !== undefined && id_sede !== null && !isValidId(id_sede)) {
-            throwError('El id_sede debe ser nulo o un número válido para el rol garajista.', 400);
+            throwError('El id_sede debe ser nulo o un número válido para el garagista.', 400);
         }
         if (!isValidId(id_garage)) {
-            throwError('El id_garage es requerido para el rol garajista y debe ser un número válido.', 400);
+            throwError('El id_garage es requerido para el rol garagista y debe ser un número válido.', 400);
         }
+    } else if (esDuenoGarage) {
+        // El dueño se crea sin relaciones iniciales. Puede controlar varios
+        // garages mediante las filas existentes de usuario_garage.
+        req.body.id_sede = null;
+        req.body.id_empresa = null;
+        req.body.id_garage = null;
     } else if (esAdmin) {
         if (id_sede !== null && id_sede !== undefined && !isValidId(id_sede)) {
             throwError('El id_sede debe ser un número válido.', 400);
@@ -205,7 +213,7 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
         if (!isValidId(id_sede)) throwError('El id_sede es requerido y debe ser un número válido.', 400);
     }
 
-    if (!esSuperadmin && !isValidId(id_empresa)) {
+    if (!esSuperadmin && !esDuenoGarage && !isValidId(id_empresa)) {
         throwError('El id_empresa es requerido y debe ser un número válido.', 400);
     }
     if (telefono && !isValidPhone(telefono)) throwError('El teléfono debe contener solo dígitos (mínimo 7).', 400);
@@ -221,7 +229,7 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
 });
 
 // UPDATE (PUT) - admin, smartlot o el propio usuario
-router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4), async (req, res) => {
+router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), async (req, res) => {
     const id = req.params.id;
 
     if (!isValidId(id)) throwError('El ID proporcionado no es válido.', 400);

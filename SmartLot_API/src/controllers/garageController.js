@@ -3,6 +3,7 @@ import GarageService from './../services/garageService.js';
 import { obtenerGaragesCercanosConTiempoReal, obtenerDistanciaEntrePuntos } from './../services/geolocalizacionService.js';
 import { isValidId, isValidString, isValidPositiveNumber, isValidTime, isValidDiaSemana } from '../helpers/validatorHelper.js';
 import { requireRole } from '../middlewares/rolesMiddleware.js';
+import { ROLE_NAMES } from '../helpers/roles.js';
 
 const router = Router();
 const svc = new GarageService();
@@ -11,6 +12,19 @@ function throwError(message, statusCode) {
     const error = new Error(message);
     error.statusCode = statusCode;
     throw error;
+}
+
+function validatePrices(prices) {
+    for (const [campo, valor] of Object.entries(prices)) {
+        if (valor !== undefined && valor !== null && (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0)) {
+            throwError(`${campo} debe ser un numero mayor o igual a 0.`, 400);
+        }
+    }
+}
+
+async function assertGarageControl(req, id) {
+    const garage = await svc.getByIdAsync(id, req.usuario);
+    if (!garage) throwError('No encontrado o sin permisos sobre el garage.', 404);
 }
 
 // GET ALL
@@ -113,7 +127,7 @@ router.get('/:id/distancia-sede', async (req, res) => {
 
 // CREATE (POST)
 router.post('', requireRole(1, 4), async (req, res) => {
-    const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias } = req.body;
+    const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
     if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
     if (!isValidId(String(id_sede))) throwError('El id_sede es requerido y debe ser un número válido.', 400);
     if (!isValidPositiveNumber(capacidad)) throwError('La capacidad debe ser un número positivo.', 400);
@@ -125,11 +139,12 @@ router.post('', requireRole(1, 4), async (req, res) => {
     for (const dia of dias) {
         if (!isValidDiaSemana(dia)) throwError(`El dia "${dia}" no es valido. Use: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.`, 400);
     }
+    validatePrices({ precio_pickup, precio_auto, precio_moto });
 
     // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
     const safeEntity = {
         id_sede, nombre, ubicacion, latitud, longitud,
-        capacidad, estado, hora_apertura, hora_cierre, dias
+        capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
     const data = await svc.createAsync(safeEntity);
     if (!data) throwError('Error interno al crear el garage.', 500);
@@ -137,9 +152,10 @@ router.post('', requireRole(1, 4), async (req, res) => {
 });
 
 // UPDATE (PUT)
-router.put('/:id', requireRole(1, 4), async (req, res) => {
+router.put('/:id', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
     if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
-    const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias } = req.body;
+    await assertGarageControl(req, Number(req.params.id));
+    const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
     if (nombre !== undefined && !isValidString(nombre)) throwError('El nombre no puede estar vacío.', 400);
     if (id_sede !== undefined && !isValidId(String(id_sede))) throwError('El id_sede debe ser un número válido.', 400);
     if (capacidad !== undefined && (typeof capacidad !== 'number' || capacidad < 0)) throwError('La capacidad debe ser un número mayor o igual a 0.', 400);
@@ -153,11 +169,12 @@ router.put('/:id', requireRole(1, 4), async (req, res) => {
             if (!isValidDiaSemana(dia)) throwError(`El dia "${dia}" no es valido. Use: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.`, 400);
         }
     }
+    validatePrices({ precio_pickup, precio_auto, precio_moto });
 
     // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
     const safeEntity = {
         id_sede, nombre, ubicacion, latitud, longitud,
-        capacidad, estado, hora_apertura, hora_cierre, dias
+        capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
     const data = await svc.updateAsync(parseInt(req.params.id, 10), safeEntity);
     if (!data) throwError('No encontrado: El garage con ese ID no existe.', 404);
@@ -175,9 +192,10 @@ router.get('/:id/dias', async (req, res) => {
 });
 
 // POST ADD DIA TO GARAGE
-router.post('/:id/dias', requireRole(1, 4), async (req, res) => {
+router.post('/:id/dias', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+    await assertGarageControl(req, id);
 
     const { dia } = req.body;
     if (!dia || !isValidDiaSemana(dia)) throwError(`El dia "${dia}" no es valido. Use: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.`, 400);
@@ -188,9 +206,10 @@ router.post('/:id/dias', requireRole(1, 4), async (req, res) => {
 });
 
 // DELETE DIA FROM GARAGE
-router.delete('/:id/dias/:dia', requireRole(1, 4), async (req, res) => {
+router.delete('/:id/dias/:dia', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+    await assertGarageControl(req, id);
 
     const { dia } = req.params;
     if (!isValidDiaSemana(dia)) throwError(`El dia "${dia}" no es valido. Use: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.`, 400);
@@ -201,9 +220,10 @@ router.delete('/:id/dias/:dia', requireRole(1, 4), async (req, res) => {
 });
 
 // DELETE
-router.delete('/:id', requireRole(1, 4), async (req, res) => {
+router.delete('/:id', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+    await assertGarageControl(req, id);
 
     const ok = await svc.deleteAsync(id);
     if (!ok) throwError('No encontrado: El garage con ese ID no existe.', 404);

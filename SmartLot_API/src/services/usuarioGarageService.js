@@ -12,4 +12,7 @@ export default class UsuarioGarageService {
 
     getUsuariosByGarageIdAsync = async (id_garage) =>
         await this.repo.getUsuariosByGarageIdAsync(id_garage);
+
+    userHasGarageAsync = async (id_usuario, id_garage) =>
+        await this.repo.userHasGarageAsync(id_usuario, id_garage);
 }

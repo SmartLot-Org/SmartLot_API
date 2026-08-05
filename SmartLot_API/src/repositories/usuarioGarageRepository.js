@@ -36,4 +36,12 @@ export default class UsuarioGarageRepository {
             return null;
         }
     }
+
+    userHasGarageAsync = async (id_usuario, id_garage) => {
+        const result = await pool.query(
+            'SELECT 1 FROM usuario_garage WHERE id_usuario = $1 AND id_garage = $2 LIMIT 1',
+            [id_usuario, id_garage]
+        );
+        return result.rowCount > 0;
+    };
 }

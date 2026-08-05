@@ -10,7 +10,7 @@ export default class GarageRepository {
 
     getAllAsync = async (requestingUser = null) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa' });
+            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa', garageColumn: 'g.id' });
             const result = await pool.query(`
                 SELECT g.*, COALESCE(
                     (SELECT array_agg(gd.dia ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
@@ -27,7 +27,7 @@ export default class GarageRepository {
 
     getByIdAsync = async (id, requestingUser = null) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa' });
+            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa', garageColumn: 'g.id' });
             const result = await pool.query(`
                 SELECT g.*, COALESCE(
                     (SELECT array_agg(gd.dia ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
@@ -63,11 +63,11 @@ export default class GarageRepository {
     createAsync = async (entity) => {
         try {
             const result = await pool.query(
-                `INSERT INTO garages (id_sede, nombre, piso, ubicacion, latitud, longitud, estado, capacidad, capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas, hora_apertura, hora_cierre)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+                `INSERT INTO garages (id_sede, nombre, piso, ubicacion, latitud, longitud, estado, capacidad, capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas, hora_apertura, hora_cierre, precio_pickup, precio_auto, precio_moto)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *`,
                 [entity.id_sede, entity.nombre, entity.piso, entity.ubicacion, entity.latitud ?? null, entity.longitud ?? null, entity.estado,
                 entity.capacidad, entity.capacidad_para_no_reservas, entity.capacidad_reservas, entity.ocupacion_reservas, entity.ocupacion_no_reservas,
-                entity.hora_apertura, entity.hora_cierre]
+                entity.hora_apertura, entity.hora_cierre, entity.precio_pickup ?? null, entity.precio_auto ?? null, entity.precio_moto ?? null]
             );
             const garage = result.rows[0];
             if (garage && entity.dias && entity.dias.length > 0) {
@@ -102,8 +102,11 @@ export default class GarageRepository {
                 ocupacion_reservas = $11, 
                 ocupacion_no_reservas = $12,
                 hora_apertura=$13,
-                hora_cierre=$14
-             WHERE id=$15
+                hora_cierre=$14,
+                precio_pickup=$15,
+                precio_auto=$16,
+                precio_moto=$17
+             WHERE id=$18
                AND COALESCE("Borrado", false) = false
              RETURNING *`,
             [
@@ -121,6 +124,9 @@ export default class GarageRepository {
                 entity.ocupacion_no_reservas,
                 entity.hora_apertura,
                 entity.hora_cierre,
+                entity.precio_pickup ?? null,
+                entity.precio_auto ?? null,
+                entity.precio_moto ?? null,
                 id
             ]
         );

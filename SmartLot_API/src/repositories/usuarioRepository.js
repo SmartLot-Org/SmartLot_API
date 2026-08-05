@@ -54,9 +54,10 @@ export default class UsuarioRepository {
         try {
             const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
-                `SELECT u.*,
-                    CASE WHEN u.id_rol = 3 THEN ug.id_garage ELSE NULL END as id_garage
+                `SELECT u.*, r.tipo_rol,
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN ug.id_garage ELSE NULL END as id_garage
                  FROM usuarios u
+                 LEFT JOIN roles r ON r.id = u.id_rol
                  LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
                  WHERE COALESCE(u."Borrado", false) = false ${tenant.sql}
                  ORDER BY u.id`,
@@ -70,9 +71,10 @@ export default class UsuarioRepository {
         try {
             const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
-                `SELECT u.*,
-                    CASE WHEN u.id_rol = 3 THEN ug.id_garage ELSE NULL END as id_garage
+                `SELECT u.*, r.tipo_rol,
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN ug.id_garage ELSE NULL END as id_garage
                  FROM usuarios u
+                 LEFT JOIN roles r ON r.id = u.id_rol
                  LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
                  WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
                 [id, ...tenant.params]
@@ -84,9 +86,10 @@ export default class UsuarioRepository {
     getByEmailAsync = async (email) => {
         try {
             const result = await pool.query(
-                `SELECT u.*,
-                    CASE WHEN u.id_rol = 3 THEN ug.id_garage ELSE NULL END as id_garage
+                `SELECT u.*, r.tipo_rol,
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN ug.id_garage ELSE NULL END as id_garage
                  FROM usuarios u
+                 LEFT JOIN roles r ON r.id = u.id_rol
                  LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
                  WHERE u.email = $1 AND COALESCE(u."Borrado", false) = false`,
                 [email]

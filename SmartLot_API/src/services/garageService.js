@@ -26,14 +26,19 @@ export default class GarageService {
 
     createAsync = async (entity) => {
         await this._validarRelacionesAsync(entity);
+        this._validarPrecios(entity);
         this._validarDiasGarage(entity);
         return await this.repo.createAsync(entity);
     }
 
     updateAsync = async (id, entity) => {
-        await this._validarRelacionesAsync(entity);
-        if (entity.dias) this._validarDiasGarage(entity);
-        return await this.repo.updateAsync(id, entity);
+        const actual = await this.repo.getByIdAsync(id);
+        if (!actual) return null;
+        const merged = { ...actual, ...Object.fromEntries(Object.entries(entity).filter(([, value]) => value !== undefined)) };
+        await this._validarRelacionesAsync(merged);
+        this._validarPrecios(merged);
+        if (entity.dias !== undefined) this._validarDiasGarage(merged);
+        return await this.repo.updateAsync(id, merged);
     }
 
     deleteAsync = async (id) => await this.repo.deleteAsync(id);
@@ -168,4 +173,15 @@ export default class GarageService {
             }
         }
     }
+
+    _validarPrecios = (entity) => {
+        for (const campo of ['precio_pickup', 'precio_auto', 'precio_moto']) {
+            const valor = entity[campo];
+            if (valor !== undefined && valor !== null && (typeof valor !== 'number' || !Number.isFinite(valor) || valor < 0)) {
+                const error = new Error(`${campo} debe ser un numero mayor o igual a 0.`);
+                error.statusCode = 400;
+                throw error;
+            }
+        }
+    };
 }

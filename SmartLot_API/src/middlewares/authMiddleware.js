@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
+import pool from '../database/db.js';
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
     let token = null;
     const authHeader = req.headers.authorization;
 
@@ -22,6 +23,14 @@ const authMiddleware = (req, res, next) => {
 
     try {
         req.usuario = jwt.verify(token, process.env.JWT_SECRET);
+        const roleResult = await pool.query(
+            'SELECT tipo_rol FROM roles WHERE id = $1 AND COALESCE("Borrado", false) = false',
+            [req.usuario.id_rol]
+        );
+        if (!roleResult.rows[0]) {
+            return res.status(401).json({ error: true, message: 'El rol del usuario no existe o esta inactivo.', statusCode: 401 });
+        }
+        req.usuario.tipo_rol = roleResult.rows[0].tipo_rol;
         next();
     } catch (error) {
         res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });

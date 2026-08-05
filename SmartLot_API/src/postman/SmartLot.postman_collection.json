@@ -383,7 +383,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\r\n  \"nombre\": \"Sala de Conferencias A\",\r\n  \"piso\": 2,\r\n  \"ubicacion\": \"Ala Norte, Sector 3\",\r\n  \"estado\": true,\r\n  \"capacidad\": 50,\r\n  \"capacidad_para_no_reservas\": 20,\r\n  \"capacidad_reservas\": 30,\r\n  \"id_sede\": 1,\r\n  \"ocupacion_reservas\": 0,\r\n  \"ocupacion_no_reserva\": 0\r\n}",
+							"raw": "{\r\n  \"nombre\": \"Garage Centro\",\r\n  \"ubicacion\": \"Ala Norte, Sector 3\",\r\n  \"estado\": true,\r\n  \"capacidad\": 50,\r\n  \"id_sede\": 1,\r\n  \"dias\": [\"Lunes\", \"Martes\"],\r\n  \"precio_pickup\": 1500,\r\n  \"precio_auto\": 1200,\r\n  \"precio_moto\": 700\r\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -427,7 +427,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\r\n  \"id_sede\": null,\r\n  \"nombre\": \"Garage Norte Editado\",\r\n  \"piso\": 2,\r\n  \"ubicacion\": \"Olivos\",\r\n  \"estado\": true,\r\n  \"capacidad\": 80,\r\n  \"capacidad_para_no_reservas\": 30,\r\n  \"capacidad_reservas\": 50,\r\n  \"ocupacion_reservas\": 4,\r\n  \"ocupacion_no_reservas\": 5\r\n}",
+							"raw": "{\r\n  \"precio_pickup\": 1600,\r\n  \"precio_auto\": 1300,\r\n  \"precio_moto\": 0\r\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -445,6 +445,41 @@
 							]
 						}
 					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Endpoints Trato Empresa Garage",
+			"item": [
+				{
+					"name": "GetAll",
+					"request": { "method": "GET", "header": [], "url": { "raw": "{{url}}/trato-empresa-garage", "host": ["{{url}}"], "path": ["trato-empresa-garage"] } },
+					"response": []
+				},
+				{
+					"name": "GetByEmpresa",
+					"request": { "method": "GET", "header": [], "url": { "raw": "{{url}}/trato-empresa-garage/empresa/1", "host": ["{{url}}"], "path": ["trato-empresa-garage", "empresa", "1"] } },
+					"response": []
+				},
+				{
+					"name": "GetByGarage",
+					"request": { "method": "GET", "header": [], "url": { "raw": "{{url}}/trato-empresa-garage/garage/2", "host": ["{{url}}"], "path": ["trato-empresa-garage", "garage", "2"] } },
+					"response": []
+				},
+				{
+					"name": "Create",
+					"request": { "method": "POST", "header": [], "body": { "mode": "raw", "raw": "{\r\n  \"id_empresa\": 1,\r\n  \"id_garage\": 2,\r\n  \"cantidad_cocheras\": 10,\r\n  \"precio_pickup\": 1500,\r\n  \"precio_auto\": 1200\r\n}", "options": { "raw": { "language": "json" } } }, "url": { "raw": "{{url}}/trato-empresa-garage", "host": ["{{url}}"], "path": ["trato-empresa-garage"] } },
+					"response": []
+				},
+				{
+					"name": "Update",
+					"request": { "method": "PUT", "header": [], "body": { "mode": "raw", "raw": "{\r\n  \"cantidad_cocheras\": 12,\r\n  \"precio_pickup\": 1600,\r\n  \"precio_auto\": 1300\r\n}", "options": { "raw": { "language": "json" } } }, "url": { "raw": "{{url}}/trato-empresa-garage/1", "host": ["{{url}}"], "path": ["trato-empresa-garage", "1"] } },
+					"response": []
+				},
+				{
+					"name": "Delete",
+					"request": { "method": "DELETE", "header": [], "url": { "raw": "{{url}}/trato-empresa-garage/1", "host": ["{{url}}"], "path": ["trato-empresa-garage", "1"] } },
 					"response": []
 				}
 			]

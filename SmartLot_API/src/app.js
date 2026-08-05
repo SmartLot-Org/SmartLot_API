@@ -15,6 +15,7 @@ import UsuarioController   from "./controllers/usuarioController.js"
 import VehiculoController  from "./controllers/vehiculoController.js"
 import ConflictoController from "./controllers/ConflictoController.js"
 import AuthController      from "./controllers/AuthController.js"
+import TratoEmpresaGarageController from "./controllers/tratoEmpresaGarageController.js"
 import authMiddleware      from "./middlewares/authMiddleware.js"
 import errorHandler       from "./middlewares/errorHandler.js"
 
@@ -45,6 +46,7 @@ app.use("/api/usuario", UsuarioController);
 app.use("/api/vehiculo", authMiddleware, VehiculoController);
 app.use("/api/auth", AuthController);
 app.use("/api/conflicto", authMiddleware, ConflictoController);
+app.use("/api/trato-empresa-garage", authMiddleware, TratoEmpresaGarageController);
 
 app.use(errorHandler);
 
