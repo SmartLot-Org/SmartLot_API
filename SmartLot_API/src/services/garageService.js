@@ -2,12 +2,17 @@
 import GarageRepository from '../repositories/garageRepository.js';
 import SedeService from './sedeService.js';
 import { isValidDiaSemana } from '../helpers/validatorHelper.js';
+import pool from '../database/db.js';
+import UsuarioGarageService from './usuarioGarageService.js';
+import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 
 export default class GarageService {
     constructor() {
         console.log('Estoy en: GarageService.constructor()');
         this.repo = new GarageRepository();
         this.sedeService = new SedeService();
+        this.usuarioGarageService = new UsuarioGarageService();
+        this.pool = pool;
     }
 
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
@@ -24,11 +29,25 @@ export default class GarageService {
 
     getOcupacionNoReservaAsync = async (id) => await this.repo.getOcupacionNoReservaAsync(id);
 
-    createAsync = async (entity) => {
+    createAsync = async (entity, usuario) => {
+        if (hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) entity = { ...entity, id_sede: null };
         await this._validarRelacionesAsync(entity);
         this._validarPrecios(entity);
         this._validarDiasGarage(entity);
-        return await this.repo.createAsync(entity);
+        if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) return await this.repo.createAsync(entity);
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const garage = await this.repo.createWithClientAsync({ ...entity, id_sede: null }, client);
+            await this.usuarioGarageService.createWithClientAsync(usuario.id, garage.id, client);
+            await client.query('COMMIT');
+            return garage;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
     updateAsync = async (id, entity) => {

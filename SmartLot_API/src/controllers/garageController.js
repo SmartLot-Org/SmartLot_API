@@ -34,6 +34,20 @@ router.get('', async (req, res) => {
     res.status(200).json(data);
 });
 
+// Descubrimiento para administradores. No concede permisos de edición.
+router.get('/cercanos', requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), async (req, res) => {
+    const sedeId = Number(req.query.sede_id);
+    const radioKm = req.query.radio_km === undefined ? 50 : Number(req.query.radio_km);
+    if (!Number.isInteger(sedeId) || sedeId <= 0) throwError('sede_id debe ser un entero valido.', 400);
+    if (!Number.isFinite(radioKm) || radioKm <= 0 || radioKm > 100) throwError('radio_km debe estar entre 0 y 100.', 400);
+    const sede = await svc.sedeService.getByIdAsync(sedeId, req.usuario);
+    if (!sede) throwError('Sede no encontrada o sin permisos.', 404);
+    if (!sede.latitud || !sede.longitud) throwError('La sede no tiene coordenadas registradas.', 400);
+    res.status(200).json(await obtenerGaragesCercanosConTiempoReal(
+        Number(sede.latitud), Number(sede.longitud), radioKm, sedeId
+    ));
+});
+
 // GET OCUPACION RESERVA BY ID
 router.get('/ocupacion_reserva/:id', async (req, res) => {
     const id = parseInt(req.params.id);
@@ -126,10 +140,10 @@ router.get('/:id/distancia-sede', async (req, res) => {
 });
 
 // CREATE (POST)
-router.post('', requireRole(1, 4), async (req, res) => {
-    const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
+router.post('', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
+    const { id_sede, nombre, piso, ubicacion, latitud, longitud, capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
     if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
-    if (!isValidId(String(id_sede))) throwError('El id_sede es requerido y debe ser un número válido.', 400);
+    if (id_sede !== undefined && id_sede !== null && !isValidId(String(id_sede))) throwError('El id_sede debe ser un número válido.', 400);
     if (!isValidPositiveNumber(capacidad)) throwError('La capacidad debe ser un número positivo.', 400);
     if (estado !== undefined && typeof estado !== 'boolean') throwError('El estado debe ser un valor booleano (true o false).', 400);
     if (hora_apertura !== undefined && hora_apertura !== null && !isValidTime(hora_apertura)) throwError('La hora de apertura debe tener formato HH:MM.', 400);
@@ -143,19 +157,19 @@ router.post('', requireRole(1, 4), async (req, res) => {
 
     // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
     const safeEntity = {
-        id_sede, nombre, ubicacion, latitud, longitud,
-        capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
+        id_sede, nombre, piso, ubicacion, latitud, longitud,
+        capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
-    const data = await svc.createAsync(safeEntity);
+    const data = await svc.createAsync(safeEntity, req.usuario);
     if (!data) throwError('Error interno al crear el garage.', 500);
     res.status(201).json(data);
 });
 
 // UPDATE (PUT)
-router.put('/:id', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+router.put('/:id', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
     await assertGarageControl(req, Number(req.params.id));
-    const { id_sede, nombre, ubicacion, latitud, longitud, capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
+    const { id_sede, nombre, piso, ubicacion, latitud, longitud, capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
     if (nombre !== undefined && !isValidString(nombre)) throwError('El nombre no puede estar vacío.', 400);
     if (id_sede !== undefined && !isValidId(String(id_sede))) throwError('El id_sede debe ser un número válido.', 400);
     if (capacidad !== undefined && (typeof capacidad !== 'number' || capacidad < 0)) throwError('La capacidad debe ser un número mayor o igual a 0.', 400);
@@ -173,8 +187,8 @@ router.put('/:id', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) 
 
     // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
     const safeEntity = {
-        id_sede, nombre, ubicacion, latitud, longitud,
-        capacidad, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
+        id_sede, nombre, piso, ubicacion, latitud, longitud,
+        capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
     const data = await svc.updateAsync(parseInt(req.params.id, 10), safeEntity);
     if (!data) throwError('No encontrado: El garage con ese ID no existe.', 404);
@@ -192,7 +206,7 @@ router.get('/:id/dias', async (req, res) => {
 });
 
 // POST ADD DIA TO GARAGE
-router.post('/:id/dias', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+router.post('/:id/dias', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
     await assertGarageControl(req, id);
@@ -206,7 +220,7 @@ router.post('/:id/dias', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req,
 });
 
 // DELETE DIA FROM GARAGE
-router.delete('/:id/dias/:dia', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+router.delete('/:id/dias/:dia', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
     await assertGarageControl(req, id);
@@ -220,7 +234,7 @@ router.delete('/:id/dias/:dia', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), asyn
 });
 
 // DELETE
-router.delete('/:id', requireRole(1, 4, ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+router.delete('/:id', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
     await assertGarageControl(req, id);

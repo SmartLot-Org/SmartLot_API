@@ -146,6 +146,41 @@ router.post('/impersonate', authMiddleware, requireRole(4), async (req, res) => 
     if (!data) throwError('Usuario no encontrado.', 404);
 
     const { contraseña, ...usuarioSinContraseña } = data;
+    const accessToken = jwt.sign({
+        id: usuarioSinContraseña.id,
+        id_rol: usuarioSinContraseña.id_rol,
+        id_empresa: usuarioSinContraseña.id_empresa,
+        id_sede: usuarioSinContraseña.id_sede,
+        impersonated_by: req.usuario.id,
+    }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
+
+    res.cookie('access_token', accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000
+    });
+    res.status(200).json({ usuario: usuarioSinContraseña });
+});
+
+router.post('/stop-impersonate', authMiddleware, async (req, res) => {
+    const superadminId = Number(req.usuario?.impersonated_by || (Number(req.usuario?.id_rol) === 4 ? req.usuario.id : 0));
+    if (!Number.isInteger(superadminId) || superadminId <= 0) throwError('No hay una impersonación activa.', 409);
+    const data = await svc.getByIdAsync(superadminId);
+    if (!data || Number(data.id_rol) !== 4) throwError('No se pudo restaurar la sesión SmartLot.', 403);
+    const { contraseña, ...usuarioSinContraseña } = data;
+    const accessToken = jwt.sign({
+        id: usuarioSinContraseña.id,
+        id_rol: usuarioSinContraseña.id_rol,
+        id_empresa: usuarioSinContraseña.id_empresa,
+        id_sede: usuarioSinContraseña.id_sede,
+    }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
+    res.cookie('access_token', accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000
+    });
     res.status(200).json({ usuario: usuarioSinContraseña });
 });
 

@@ -1,94 +1,99 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import GarageService from '../src/services/garageService.js';
 import TratoEmpresaGarageService from '../src/services/tratoEmpresaGarageService.js';
 
-const owner = { id: 50, id_rol: 99, tipo_rol: 'dueño_garage' };
+const owner = { id: 50, tipo_rol: 'dueño_garage' };
+const admin = { id: 10, id_rol: 1, tipo_rol: 'admin', id_empresa: 1 };
+const adminSede = { ...admin, id_sede: 7 };
 const superadmin = { id: 1, id_rol: 4, tipo_rol: 'superadmin' };
 
-function garageService() {
-    const svc = new GarageService();
-    const rows = new Map();
-    svc.sedeService = { getByIdAsync: async () => ({ id: 1 }) };
-    svc.repo = {
-        createAsync: async (e) => { const row = { id: 1, ...e }; rows.set(1, row); return row; },
-        getByIdAsync: async (id) => rows.get(id) ?? null,
-        updateAsync: async (id, e) => { const row = { id, ...e }; rows.set(id, row); return row; },
-    };
-    return svc;
+function garageService({ relationFails = false } = {}) {
+  const svc = new GarageService();
+  const commands = [];
+  const client = { query: async (sql) => { commands.push(sql); }, release: () => commands.push('RELEASE') };
+  svc.pool = { connect: async () => client };
+  svc.repo = {
+    createWithClientAsync: async (e) => ({ id: 9, ...e }),
+    createAsync: async (e) => ({ id: 9, ...e }),
+    getByIdAsync: async (id, user) => user?.id === 999 ? null : ({ id, capacidad: 10, dias: ['Lunes'] }),
+  };
+  svc.usuarioGarageService = { createWithClientAsync: async () => { if (relationFails) throw new Error('relation failed'); } };
+  svc.sedeService = { getByIdAsync: async () => ({ id: 7 }) };
+  return { svc, commands };
 }
 
-test('Garage crea, consulta y actualiza los tres precios, incluyendo cero', async () => {
-    const svc = garageService();
-    const base = { id_sede: 1, nombre: 'G', capacidad: 10, dias: ['Lunes'], precio_pickup: 0, precio_auto: 100, precio_moto: 50 };
-    const created = await svc.createAsync(base);
-    assert.deepEqual([created.precio_pickup, created.precio_auto, created.precio_moto], [0, 100, 50]);
-    assert.equal((await svc.getByIdAsync(1)).precio_auto, 100);
-    const updated = await svc.updateAsync(1, { precio_pickup: 25, precio_auto: 0, precio_moto: 10 });
-    assert.deepEqual([updated.precio_pickup, updated.precio_auto, updated.precio_moto], [25, 0, 10]);
+const garage = { nombre: 'Garage', capacidad: 10, dias: ['Lunes'], precio_auto: 10, precio_moto: 5, precio_pickup: 15 };
+test('dueño crea garage sin sede y queda relacionado en la misma transacción', async () => {
+  const { svc, commands } = garageService();
+  const created = await svc.createAsync({ ...garage, id_sede: 88 }, owner);
+  assert.equal(created.id_sede, null);
+  assert.deepEqual(commands.slice(0, 2), ['BEGIN', 'COMMIT']);
+});
+test('si falla usuario_garage se revierte y no queda garage huérfano', async () => {
+  const { svc, commands } = garageService({ relationFails: true });
+  await assert.rejects(() => svc.createAsync(garage, owner), /relation failed/);
+  assert.ok(commands.includes('ROLLBACK'));
+  assert.ok(!commands.includes('COMMIT'));
+});
+test('dueño no obtiene un garage ajeno para modificarlo', async () => {
+  const { svc } = garageService();
+  assert.equal(await svc.getByIdAsync(2, { ...owner, id: 999 }), null);
 });
 
-test('Garage rechaza precios negativos', async () => {
-    const svc = garageService();
-    await assert.rejects(() => svc.createAsync({ id_sede: 1, dias: ['Lunes'], precio_auto: -1 }), { statusCode: 400 });
-});
-
-function tratoService({ empresa = true, garage = true, capacity = 10, owned = true } = {}) {
-    const svc = new TratoEmpresaGarageService();
-    const rows = new Map();
-    let nextId = 1;
-    svc.empresaService = { getByIdAsync: async () => empresa ? ({ id: 1 }) : null };
-    svc.garageService = { getByIdAsync: async () => garage ? ({ id: 2, capacidad: capacity }) : null };
-    svc.usuarioGarageService = { userHasGarageAsync: async () => owned };
-    svc.repo = {
-        getAllAsync: async () => [...rows.values()],
-        getByIdAsync: async (id) => rows.get(id) ?? null,
-        getByEmpresaAsync: async (id) => [...rows.values()].filter(r => r.id_empresa === id),
-        getByGarageAsync: async (id) => [...rows.values()].filter(r => r.id_garage === id),
-        getByEmpresaGarageAsync: async (e, g, exclude) => [...rows.values()].find(r => r.id_empresa === e && r.id_garage === g && r.id !== exclude) ?? null,
-        createAsync: async (e) => { const row = { id: nextId++, created_at: new Date().toISOString(), ...e }; rows.set(row.id, row); return row; },
-        updateAsync: async (id, e) => { const row = { ...rows.get(id), ...e }; rows.set(id, row); return row; },
-        deleteAsync: async (id) => rows.delete(id),
-    };
-    return svc;
+function tratoService() {
+  const svc = new TratoEmpresaGarageService();
+  const rows = [];
+  svc.sedeService = { getByIdAsync: async (id) => id === 99 ? ({ id, id_empresa: 2 }) : ({ id, id_empresa: id === 8 ? 2 : 1 }) };
+  svc.usuarioGarageService = { userHasGarageAsync: async () => false };
+  svc.repo = {
+    getBySedeGarageAsync: async (s, g) => rows.find((r) => r.id_sede === s && r.id_garage === g) || null,
+    createAgreementAsync: async (e) => { const row = { id: rows.length + 1, precio_auto: 100, precio_pickup: 200, ...e }; rows.push(row); return row; },
+    getByIdAsync: async (id) => rows.find((r) => r.id === id) || null,
+    getByEmpresaAsync: async (e, s) => rows.filter((r) => r.id_empresa === e && (!s || r.id_sede === s)),
+    getByGarageAsync: async (g) => rows.filter((r) => r.id_garage === g),
+    getAllAsync: async () => rows,
+    updateQuantityAsync: async (id, cantidad) => Object.assign(rows.find((r) => r.id === id), { cantidad_cocheras: cantidad }),
+    deleteAsync: async (id) => rows.splice(rows.findIndex((r) => r.id === id), 1).length === 1,
+  };
+  return { svc, rows };
 }
 
-const valid = { id_empresa: 1, id_garage: 2, cantidad_cocheras: 5, precio_pickup: 0, precio_auto: 20 };
-
-test('Trato CRUD, created_at y consultas por ID, empresa y garage', async () => {
-    const svc = tratoService();
-    const created = await svc.createAsync(valid, owner);
-    assert.ok(created.created_at);
-    assert.equal((await svc.getByIdAsync(created.id, owner)).id, created.id);
-    assert.equal((await svc.getByEmpresaAsync(1, owner)).length, 1);
-    assert.equal((await svc.getByGarageAsync(2, owner)).length, 1);
-    const updated = await svc.updateAsync(created.id, { cantidad_cocheras: 6, precio_pickup: 10, precio_auto: 0, created_at: 'forged' }, owner);
-    assert.equal(updated.cantidad_cocheras, 6);
-    assert.notEqual(updated.created_at, 'forged');
-    assert.equal(await svc.deleteAsync(created.id, owner), true);
+test('admin no puede crear un trato directo ni falsificando empresa o precios', async () => {
+  const { svc } = tratoService();
+  await assert.rejects(() => svc.createAsync({ id_empresa: 999, id_sede: 7, id_garage: 3, cantidad_cocheras: 4, precio_auto: 1 }, admin), { statusCode: 403 });
+});
+test('admin restringido no opera otra sede y una sede ajena a su empresa se rechaza', async () => {
+  const { svc } = tratoService();
+  await assert.rejects(() => svc.createAsync({ id_sede: 8, id_garage: 3, cantidad_cocheras: 1 }, adminSede), { statusCode: 403 });
+  await assert.rejects(() => svc.createAsync({ id_sede: 99, id_garage: 3, cantidad_cocheras: 1 }, admin), { statusCode: 403 });
+});
+test('mismo garage admite empresas y sedes distintas pero no duplica sede + garage', async () => {
+  const { svc } = tratoService();
+  await svc.createAsync({ id_empresa: 1, id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  await svc.createAsync({ id_empresa: 2, id_sede: 8, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  await assert.rejects(() => svc.createAsync({ id_empresa: 1, id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin), { statusCode: 409 });
+});
+test('admin solo puede cambiar cantidad, no empresa, garage ni precio', async () => {
+  const { svc } = tratoService();
+  const row = await svc.createAsync({ id_empresa: 1, id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  const changed = await svc.updateAsync(row.id, { cantidad_cocheras: 2, id_empresa: 9, id_garage: 9, precio_auto: 1 }, admin);
+  assert.deepEqual([changed.cantidad_cocheras, changed.id_empresa, changed.id_garage, changed.precio_auto], [2, 1, 3, 100]);
 });
 
-test('Trato rechaza empresa y garage inexistentes', async () => {
-    await assert.rejects(() => tratoService({ empresa: false }).createAsync(valid, superadmin), /empresa no existe/i);
-    await assert.rejects(() => tratoService({ garage: false }).createAsync(valid, superadmin), /garage no existe/i);
+const controller = await readFile(new URL('../src/controllers/garageController.js', import.meta.url), 'utf8');
+const repository = await readFile(new URL('../src/repositories/garageRepository.js', import.meta.url), 'utf8');
+const tratoRepo = await readFile(new URL('../src/repositories/tratoEmpresaGarageRepository.js', import.meta.url), 'utf8');
+test('admin no puede crear, editar ni eliminar garage físico y cercanos está antes de /:id', () => {
+  assert.match(controller, /post\('', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
+  assert.match(controller, /put\('\/:id', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
+  assert.ok(controller.indexOf("get('/cercanos'") < controller.indexOf("get('/:id'"));
 });
-
-test('Trato valida cantidad positiva, capacidad y precios', async () => {
-    const svc = tratoService({ capacity: 4 });
-    await assert.rejects(() => svc.createAsync({ ...valid, cantidad_cocheras: 0 }, superadmin), /mayor que 0/i);
-    await assert.rejects(() => svc.createAsync(valid, superadmin), /capacidad total/i);
-    await assert.rejects(() => tratoService().createAsync({ ...valid, precio_auto: -1 }, superadmin), /precio_auto/i);
+test('acceso normal usa usuario_garage o trato y no pertenencia histórica por sede', () => {
+  assert.match(repository, /usuario_garage/); assert.match(repository, /trato_empresa_garage/);
+  assert.doesNotMatch(repository.slice(0, repository.indexOf('createAsync')), /\bg\.id_sede|JOIN sedes/);
 });
-
-test('Trato rechaza duplicados', async () => {
-    const svc = tratoService();
-    await svc.createAsync(valid, superadmin);
-    await assert.rejects(() => svc.createAsync(valid, superadmin), { statusCode: 409 });
-});
-
-test('Dueño no modifica un trato de un garage ajeno', async () => {
-    const svc = tratoService();
-    const created = await svc.createAsync(valid, superadmin);
-    svc.usuarioGarageService.userHasGarageAsync = async () => false;
-    await assert.rejects(() => svc.updateAsync(created.id, { precio_auto: 5 }, owner), { statusCode: 403 });
+test('capacidad de tratos se suma bajo bloqueo de garage', () => {
+  assert.match(tratoRepo, /FOR UPDATE/); assert.match(tratoRepo, /SUM\(cantidad_cocheras\)/);
 });

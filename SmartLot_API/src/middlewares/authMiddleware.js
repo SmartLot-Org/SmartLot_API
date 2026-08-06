@@ -22,15 +22,27 @@ const authMiddleware = async (req, res, next) => {
     }
 
     try {
-        req.usuario = jwt.verify(token, process.env.JWT_SECRET);
-        const roleResult = await pool.query(
-            'SELECT tipo_rol FROM roles WHERE id = $1 AND COALESCE("Borrado", false) = false',
-            [req.usuario.id_rol]
+        const tokenUsuario = jwt.verify(token, process.env.JWT_SECRET);
+        const usuarioResult = await pool.query(
+            `SELECT u.id_rol, u.id_empresa, u.id_sede, r.tipo_rol
+             FROM usuarios u
+             INNER JOIN roles r ON r.id = u.id_rol
+             WHERE u.id = $1
+               AND COALESCE(u.activo, true) = true
+               AND COALESCE(u."Borrado", false) = false
+               AND COALESCE(r."Borrado", false) = false`,
+            [tokenUsuario.id]
         );
-        if (!roleResult.rows[0]) {
-            return res.status(401).json({ error: true, message: 'El rol del usuario no existe o esta inactivo.', statusCode: 401 });
+        if (!usuarioResult.rows[0]) {
+            return res.status(401).json({ error: true, message: 'El usuario no existe o esta inactivo.', statusCode: 401 });
         }
-        req.usuario.tipo_rol = roleResult.rows[0].tipo_rol;
+        req.usuario = {
+            ...tokenUsuario,
+            id_rol: usuarioResult.rows[0].id_rol,
+            id_empresa: usuarioResult.rows[0].id_empresa,
+            id_sede: usuarioResult.rows[0].id_sede,
+            tipo_rol: usuarioResult.rows[0].tipo_rol,
+        };
         next();
     } catch (error) {
         res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });

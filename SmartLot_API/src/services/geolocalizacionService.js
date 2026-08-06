@@ -44,6 +44,14 @@ const calcularDistanciaGeometrica = (origenLat, origenLng, destLat, destLng) => 
 export const obtenerDistanciaEntrePuntos = async (origenLat, origenLng, destLat, destLng) => {
     const apiKey = process.env.GOOGLE_MAPS_BACKEND_KEY;
 
+    if (!apiKey) {
+        return {
+            ...calcularDistanciaGeometrica(origenLat, origenLng, destLat, destLng),
+            origen: { lat: Number(origenLat), lng: Number(origenLng) },
+            destino: { lat: Number(destLat), lng: Number(destLng) },
+        };
+    }
+
     const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origenLat},${origenLng}&destinations=${destLat},${destLng}&key=${apiKey}`;
 
     try {
@@ -76,23 +84,35 @@ export const obtenerDistanciaEntrePuntos = async (origenLat, origenLng, destLat,
     };
 };
 
-export const obtenerGaragesCercanosConTiempoReal = async (sedeLat, sedeLng) => {
+export const obtenerGaragesCercanosConTiempoReal = async (sedeLat, sedeLng, radioKm = RADIO_KM, sedeId = null) => {
     const repo = new GarageRepository();
-    const garages = await repo.getCercanosAsync(sedeLat, sedeLng, RADIO_KM);
+    const garages = await repo.getCercanosAsync(sedeLat, sedeLng, radioKm, sedeId);
 
     if (!garages || garages.length === 0) {
         return [];
     }
 
+    const conDistanciaGeometrica = () => garages.map((garage) => ({
+        ...garage,
+        distanciaTexto: formatearDistancia(Number(garage.distance)),
+        distanciaKm: Number(garage.distance),
+        tiempoConduccion: formatearDuracion((Number(garage.distance) / VELOCIDAD_PROMEDIO_KMH) * 60),
+        tiempoSegundos: Math.round((Number(garage.distance) / VELOCIDAD_PROMEDIO_KMH) * 3600),
+    })).sort((a, b) => Number(a.distance) - Number(b.distance));
+
+    const apiKey = process.env.GOOGLE_MAPS_BACKEND_KEY;
+    if (!apiKey) return conDistanciaGeometrica();
+
     try {
         const destinos = garages.map(g => `${g.latitud},${g.longitud}`).join('|');
         const origen = `${sedeLat},${sedeLng}`;
-        const apiKey = process.env.GOOGLE_MAPS_BACKEND_KEY;
-
         const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origen}&destinations=${destinos}&key=${apiKey}`;
 
         const response = await axios.get(url);
-        const elementos = response.data.rows[0].elements;
+        const elementos = response.data?.rows?.[0]?.elements;
+        if (response.data?.status !== 'OK' || !Array.isArray(elementos)) {
+            return conDistanciaGeometrica();
+        }
 
         const resultados = garages.map((garage, index) => ({
             ...garage,
@@ -102,9 +122,7 @@ export const obtenerGaragesCercanosConTiempoReal = async (sedeLat, sedeLng) => {
         }));
 
         return resultados.sort((a, b) => a.tiempoSegundos - b.tiempoSegundos);
-    } catch (error) {
-        console.error('Error consultando Distance Matrix, usando distancia geométrica:', error.message);
-
-        return garages.sort((a, b) => a.distance - b.distance);
+    } catch {
+        return conDistanciaGeometrica();
     }
 };

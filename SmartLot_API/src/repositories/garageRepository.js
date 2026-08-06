@@ -1,7 +1,7 @@
 // garageRepository.js
 import pool from '../database/db.js';
 import { getDiasSemana } from '../helpers/validatorHelper.js';
-import { getTenantCondition } from '../helpers/tenantFilter.js';
+import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 
 export default class GarageRepository {
     constructor() {
@@ -10,33 +10,61 @@ export default class GarageRepository {
 
     getAllAsync = async (requestingUser = null) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa', garageColumn: 'g.id' });
+            let accessSql = '';
+            const params = [];
+            if (requestingUser && !hasRole(requestingUser, 4, ROLE_NAMES.SUPERADMIN)) {
+                if (hasRole(requestingUser, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.GARAGISTA)) {
+                    params.push(requestingUser?.id);
+                    accessSql = ` AND EXISTS (SELECT 1 FROM usuario_garage ug WHERE ug.id_usuario = $${params.length} AND ug.id_garage = g.id)`;
+                } else {
+                    params.push(requestingUser?.id_empresa);
+                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg WHERE teg.id_empresa = $${params.length} AND teg.id_garage = g.id`;
+                    if (requestingUser?.id_sede) {
+                        params.push(requestingUser.id_sede);
+                        accessSql += ` AND teg.id_sede = $${params.length}`;
+                    }
+                    accessSql += ')';
+                }
+            }
             const result = await pool.query(`
                 SELECT g.*, COALESCE(
-                    (SELECT array_agg(gd.dia ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
-                    '{}'::dia_semana[]
+                    (SELECT array_agg(gd.dia::text ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
+                    '{}'::text[]
                 ) AS dias
                 FROM garages g
-                INNER JOIN sedes s ON s.id = g.id_sede
-                WHERE COALESCE(g."Borrado", false) = false ${tenant.sql}
+                WHERE COALESCE(g."Borrado", false) = false ${accessSql}
                 ORDER BY g.id
-            `, [...tenant.params]);
+            `, params);
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'g.id_sede', empresaColumn: 's.id_empresa', garageColumn: 'g.id' });
+            let accessSql = '';
+            const params = [id];
+            if (requestingUser && !hasRole(requestingUser, 4, ROLE_NAMES.SUPERADMIN)) {
+                if (hasRole(requestingUser, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.GARAGISTA)) {
+                    params.push(requestingUser?.id);
+                    accessSql = ` AND EXISTS (SELECT 1 FROM usuario_garage ug WHERE ug.id_usuario = $${params.length} AND ug.id_garage = g.id)`;
+                } else {
+                    params.push(requestingUser?.id_empresa);
+                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg WHERE teg.id_empresa = $${params.length} AND teg.id_garage = g.id`;
+                    if (requestingUser?.id_sede) {
+                        params.push(requestingUser.id_sede);
+                        accessSql += ` AND teg.id_sede = $${params.length}`;
+                    }
+                    accessSql += ')';
+                }
+            }
             const result = await pool.query(`
                 SELECT g.*, COALESCE(
-                    (SELECT array_agg(gd.dia ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
-                    '{}'::dia_semana[]
+                    (SELECT array_agg(gd.dia::text ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
+                    '{}'::text[]
                 ) AS dias
                 FROM garages g
-                INNER JOIN sedes s ON s.id = g.id_sede
-                WHERE g.id = $1 AND COALESCE(g."Borrado", false) = false ${tenant.sql}
-            `, [id, ...tenant.params]);
+                WHERE g.id = $1 AND COALESCE(g."Borrado", false) = false ${accessSql}
+            `, params);
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
     }
@@ -83,6 +111,27 @@ export default class GarageRepository {
             return garage;
         } catch (error) { console.error(error); return null; }
     }
+
+    createWithClientAsync = async (entity, client) => {
+        const result = await client.query(
+            `INSERT INTO garages (id_sede, nombre, piso, ubicacion, latitud, longitud, estado, capacidad,
+                capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas,
+                hora_apertura, hora_cierre, precio_pickup, precio_auto, precio_moto)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15) RETURNING *`,
+            [entity.id_sede ?? null, entity.nombre, entity.piso ?? null, entity.ubicacion, entity.latitud ?? null,
+             entity.longitud ?? null, entity.estado ?? true, entity.capacidad, entity.capacidad_para_no_reservas ?? null,
+             entity.capacidad_reservas ?? null, entity.hora_apertura ?? null, entity.hora_cierre ?? null,
+             entity.precio_pickup ?? null, entity.precio_auto ?? null, entity.precio_moto ?? null]
+        );
+        const garage = result.rows[0];
+        for (const dia of getDiasSemana()) {
+            await client.query(
+                'INSERT INTO garage_dias (id_garage, dia, activo) VALUES ($1,$2,$3) ON CONFLICT (id_garage,dia) DO UPDATE SET activo=$3',
+                [garage.id, dia, entity.dias.includes(dia)]
+            );
+        }
+        return garage;
+    };
 
     updateAsync = async (id, entity) => {
         let result;
@@ -256,19 +305,22 @@ export default class GarageRepository {
         } catch (error) { console.error(error); return false; }
     }
 
-    getCercanosAsync = async (lat, lng, radioKm) => {
+    getCercanosAsync = async (lat, lng, radioKm, sedeId) => {
         try {
             const result = await pool.query(`
-                SELECT *, (
+                SELECT g.*, COALESCE((SELECT array_agg(gd.dia::text ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage=g.id AND gd.activo=true), '{}'::text[]) AS dias,
+                  GREATEST(0, COALESCE(g.capacidad,0) - COALESCE((SELECT SUM(t.cantidad_cocheras) FROM trato_empresa_garage t WHERE t.id_garage=g.id),0)) AS cocheras_disponibles,
+                  EXISTS(SELECT 1 FROM trato_empresa_garage ts WHERE ts.id_garage=g.id AND ts.id_sede=$4) AS ya_contratado, (
                     6371 * acos(
                         cos(radians($1)) * cos(radians(latitud)) *
                         cos(radians(longitud) - radians($2)) +
                         sin(radians($1)) * sin(radians(latitud))
                     )
                 ) AS distance
-                FROM garages
-                WHERE latitud IS NOT NULL
-                  AND longitud IS NOT NULL
+                FROM garages g
+                WHERE g.latitud IS NOT NULL
+                  AND g.longitud IS NOT NULL
+                  AND g.estado IS DISTINCT FROM false
                   AND COALESCE("Borrado", false) = false
                   AND (
                     6371 * acos(
@@ -278,7 +330,7 @@ export default class GarageRepository {
                     )
                   ) < $3
                 ORDER BY distance
-            `, [lat, lng, radioKm]);
+            `, [lat, lng, radioKm, sedeId]);
             return result.rows;
         } catch (error) { console.error(error); return null; }
     }
