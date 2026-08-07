@@ -46,11 +46,12 @@ const queries = [
         ORDER BY ordinal_position
     `],
     ['requests', `
-        SELECT so.id, so.estado, so.id_garage, so.id_empresa,
+        SELECT so.id, so.estado, so.id_garage, so.id_sede, s.id_empresa,
                ARRAY_REMOVE(ARRAY_AGG(ug.id_usuario), NULL) AS owner_ids
         FROM solicitudes so
+        JOIN sedes s ON s.id = so.id_sede
         LEFT JOIN usuario_garage ug ON ug.id_garage = so.id_garage
-        GROUP BY so.id, so.estado, so.id_garage, so.id_empresa
+        GROUP BY so.id, so.estado, so.id_garage, so.id_sede, s.id_empresa
         ORDER BY so.id DESC
         LIMIT 20
     `],

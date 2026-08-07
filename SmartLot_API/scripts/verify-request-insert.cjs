@@ -12,7 +12,7 @@ const pool = new Pool({
     try {
         await client.query('BEGIN');
         const result = await client.query(`
-            INSERT INTO solicitudes (id_empresa, id_garage, descripcion, cantidad_cocheras, estado)
+            INSERT INTO solicitudes (id_sede, id_garage, descripcion, cantidad_cocheras, estado)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING *
         `, [5, 21, 'verificacion rollback', 1, 'pendiente']);

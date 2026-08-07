@@ -13,8 +13,8 @@ const parseId = (value) => {
 };
 
 router.post('', requireRole(1, ROLE_NAMES.ADMIN), async (req, res) => {
-    const { id_garage, cantidad_cocheras, descripcion } = req.body;
-    res.status(201).json(await svc.createAsync({ id_garage, cantidad_cocheras, descripcion }, req.usuario));
+    const { id_sede, id_garage, cantidad_cocheras, descripcion } = req.body;
+    res.status(201).json(await svc.createAsync({ id_sede, id_garage, cantidad_cocheras, descripcion }, req.usuario));
 });
 
 router.get('/enviadas', requireRole(1, ROLE_NAMES.ADMIN), async (req, res) => {

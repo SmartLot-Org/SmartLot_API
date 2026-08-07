@@ -18,7 +18,7 @@ export default class GarageRepository {
                     accessSql = ` AND EXISTS (SELECT 1 FROM usuario_garage ug WHERE ug.id_usuario = $${params.length} AND ug.id_garage = g.id)`;
                 } else {
                     params.push(requestingUser?.id_empresa);
-                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg WHERE teg.id_empresa = $${params.length} AND teg.id_garage = g.id`;
+                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg JOIN sedes ts ON ts.id=teg.id_sede WHERE ts.id_empresa = $${params.length} AND teg.id_garage = g.id`;
                     if (requestingUser?.id_sede) {
                         params.push(requestingUser.id_sede);
                         accessSql += ` AND teg.id_sede = $${params.length}`;
@@ -49,7 +49,7 @@ export default class GarageRepository {
                     accessSql = ` AND EXISTS (SELECT 1 FROM usuario_garage ug WHERE ug.id_usuario = $${params.length} AND ug.id_garage = g.id)`;
                 } else {
                     params.push(requestingUser?.id_empresa);
-                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg WHERE teg.id_empresa = $${params.length} AND teg.id_garage = g.id`;
+                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg JOIN sedes ts ON ts.id=teg.id_sede WHERE ts.id_empresa = $${params.length} AND teg.id_garage = g.id`;
                     if (requestingUser?.id_sede) {
                         params.push(requestingUser.id_sede);
                         accessSql += ` AND teg.id_sede = $${params.length}`;

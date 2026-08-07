@@ -49,7 +49,7 @@ function tratoService() {
   svc.usuarioGarageService = { userHasGarageAsync: async () => false };
   svc.repo = {
     getBySedeGarageAsync: async (s, g) => rows.find((r) => r.id_sede === s && r.id_garage === g) || null,
-    createAgreementAsync: async (e) => { const row = { id: rows.length + 1, precio_auto: 100, precio_pickup: 200, ...e }; rows.push(row); return row; },
+    createAgreementAsync: async (e) => { const row = { id: rows.length + 1, id_empresa: e.id_sede === 8 ? 2 : 1, precio_auto: 100, precio_pickup: 200, ...e }; rows.push(row); return row; },
     getByIdAsync: async (id) => rows.find((r) => r.id === id) || null,
     getByEmpresaAsync: async (e, s) => rows.filter((r) => r.id_empresa === e && (!s || r.id_sede === s)),
     getByGarageAsync: async (g) => rows.filter((r) => r.id_garage === g),
@@ -69,15 +69,15 @@ test('admin restringido no opera otra sede y una sede ajena a su empresa se rech
   await assert.rejects(() => svc.createAsync({ id_sede: 8, id_garage: 3, cantidad_cocheras: 1 }, adminSede), { statusCode: 403 });
   await assert.rejects(() => svc.createAsync({ id_sede: 99, id_garage: 3, cantidad_cocheras: 1 }, admin), { statusCode: 403 });
 });
-test('mismo garage admite empresas y sedes distintas pero no duplica sede + garage', async () => {
+test('mismo garage admite sedes distintas pero no duplica sede + garage', async () => {
   const { svc } = tratoService();
-  await svc.createAsync({ id_empresa: 1, id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
-  await svc.createAsync({ id_empresa: 2, id_sede: 8, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
-  await assert.rejects(() => svc.createAsync({ id_empresa: 1, id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin), { statusCode: 409 });
+  await svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  await svc.createAsync({ id_sede: 8, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin), { statusCode: 409 });
 });
 test('admin solo puede cambiar cantidad, no empresa, garage ni precio', async () => {
   const { svc } = tratoService();
-  const row = await svc.createAsync({ id_empresa: 1, id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  const row = await svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
   const changed = await svc.updateAsync(row.id, { cantidad_cocheras: 2, id_empresa: 9, id_garage: 9, precio_auto: 1 }, admin);
   assert.deepEqual([changed.cantidad_cocheras, changed.id_empresa, changed.id_garage, changed.precio_auto], [2, 1, 3, 100]);
 });
@@ -90,9 +90,9 @@ test('admin no puede crear, editar ni eliminar garage físico y cercanos está a
   assert.match(controller, /put\('\/:id', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
   assert.ok(controller.indexOf("get('/cercanos'") < controller.indexOf("get('/:id'"));
 });
-test('acceso normal usa usuario_garage o trato y no pertenencia histórica por sede', () => {
+test('acceso normal usa usuario_garage o trato derivando empresa mediante sede', () => {
   assert.match(repository, /usuario_garage/); assert.match(repository, /trato_empresa_garage/);
-  assert.doesNotMatch(repository.slice(0, repository.indexOf('createAsync')), /\bg\.id_sede|JOIN sedes/);
+  assert.match(repository.slice(0, repository.indexOf('createAsync')), /JOIN sedes ts ON ts\.id=teg\.id_sede/);
 });
 test('capacidad de tratos se suma bajo bloqueo de garage', () => {
   assert.match(tratoRepo, /FOR UPDATE/); assert.match(tratoRepo, /SUM\(cantidad_cocheras\)/);

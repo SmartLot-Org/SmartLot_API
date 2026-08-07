@@ -17,10 +17,7 @@ export default class TratoEmpresaGarageService {
     getAllAsync = async (usuario) => {
         if (hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) return this.repo.getAllAsync();
         if (hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) {
-            const all = await this.repo.getAllAsync();
-            const result = [];
-            for (const row of all) if (await this.usuarioGarageService.userHasGarageAsync(usuario.id, row.id_garage)) result.push(row);
-            return result;
+            return this.repo.getByOwnerAsync(usuario.id);
         }
         return this.repo.getByEmpresaAsync(Number(usuario.id_empresa), usuario.id_sede ? Number(usuario.id_sede) : null);
     };
@@ -44,16 +41,15 @@ export default class TratoEmpresaGarageService {
 
     createAsync = async (input, usuario) => {
         if (!hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) fail('Los tratos se crean aceptando una solicitud.', 403);
-        const idEmpresa = Number(input.id_empresa);
         const idSede = Number(input.id_sede);
         const idGarage = Number(input.id_garage);
         const cantidad = Number(input.cantidad_cocheras);
-        if (![idEmpresa, idSede, idGarage, cantidad].every(Number.isInteger) || Math.min(idEmpresa,idSede,idGarage,cantidad) <= 0) fail('Empresa, sede, garage y cantidad deben ser enteros positivos.', 400);
+        if (![idSede, idGarage, cantidad].every(Number.isInteger) || Math.min(idSede,idGarage,cantidad) <= 0) fail('Sede, garage y cantidad deben ser enteros positivos.', 400);
         if (usuario.id_sede && Number(usuario.id_sede) !== idSede) fail('No puede operar con otra sede.', 403);
         const sede = await this.sedeService.getByIdAsync(idSede);
-        if (!sede || Number(sede.id_empresa) !== idEmpresa) fail('La sede no pertenece a la empresa autenticada.', 403);
+        if (!sede) fail('La sede no existe o esta inactiva.', 404);
         if (await this.repo.getBySedeGarageAsync(idSede, idGarage)) fail('Ya existe un trato para esa sede y garage.', 409);
-        return this.repo.createAgreementAsync({ id_empresa: idEmpresa, id_sede: idSede, id_garage: idGarage, cantidad_cocheras: cantidad });
+        return this.repo.createAgreementAsync({ id_sede: idSede, id_garage: idGarage, cantidad_cocheras: cantidad });
     };
 
     updateAsync = async (id, changes, usuario) => {

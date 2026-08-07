@@ -1,7 +1,7 @@
 class SolicitudEmpresaGarage {
     id;
     created_at;
-    id_empresa;
+    id_sede;
     id_garage;
     descripcion;
     cantidad_cocheras;

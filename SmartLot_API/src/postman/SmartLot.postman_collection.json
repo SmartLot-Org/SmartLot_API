@@ -469,7 +469,7 @@
 				},
 				{
 					"name": "Create",
-					"request": { "method": "POST", "header": [], "body": { "mode": "raw", "raw": "{\r\n  \"id_empresa\": 1,\r\n  \"id_garage\": 2,\r\n  \"cantidad_cocheras\": 10,\r\n  \"precio_pickup\": 1500,\r\n  \"precio_auto\": 1200\r\n}", "options": { "raw": { "language": "json" } } }, "url": { "raw": "{{url}}/trato-empresa-garage", "host": ["{{url}}"], "path": ["trato-empresa-garage"] } },
+					"request": { "method": "POST", "header": [], "body": { "mode": "raw", "raw": "{\r\n  \"id_sede\": 1,\r\n  \"id_garage\": 2,\r\n  \"cantidad_cocheras\": 10\r\n}", "options": { "raw": { "language": "json" } } }, "url": { "raw": "{{url}}/trato-empresa-garage", "host": ["{{url}}"], "path": ["trato-empresa-garage"] } },
 					"response": []
 				},
 				{

@@ -24,7 +24,7 @@ const parseId = (value, field = 'ID') => {
 };
 
 const body = (source, partial = false) => {
-    const fields = ['id_empresa', 'id_sede', 'id_garage', 'cantidad_cocheras'];
+    const fields = ['id_sede', 'id_garage', 'cantidad_cocheras'];
     const result = {};
     for (const field of fields) {
         if (!partial || source[field] !== undefined) result[field] = source[field];
@@ -53,6 +53,7 @@ router.post('', requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), asyn
         return res.status(201).json(await svc.createAsync(body(req.body), req.usuario));
     }
     const solicitud = await solicitudSvc.createAsync({
+        id_sede: req.body.id_sede,
         id_garage: req.body.id_garage,
         cantidad_cocheras: req.body.cantidad_cocheras,
         descripcion: req.body.descripcion,

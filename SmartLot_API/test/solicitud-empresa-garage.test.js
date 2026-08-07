@@ -7,6 +7,7 @@ import TratoEmpresaGarageService from '../src/services/tratoEmpresaGarageService
 import { ESTADOS_SOLICITUD, puedeTransicionarSolicitud } from '../src/helpers/estadosSolicitud.js';
 
 const admin = { id: 1, id_rol: 1, tipo_rol: 'admin', id_empresa: 10 };
+const adminSede = { ...admin, id_sede: 7 };
 const otroAdmin = { ...admin, id: 2, id_empresa: 20 };
 const owner = { id: 30, tipo_rol: 'dueño_garage' };
 const otroOwner = { id: 31, tipo_rol: 'dueño_garage' };
@@ -14,7 +15,7 @@ const superadmin = { id: 99, id_rol: 4, tipo_rol: 'superadmin' };
 
 function serviceFixture() {
     const svc = new SolicitudEmpresaGarageService();
-    const rows = [{ id: 1, id_empresa: 10, id_garage: 5, estado: ESTADOS_SOLICITUD.PENDIENTE }];
+    const rows = [{ id: 1, id_sede: 7, id_empresa: 10, id_garage: 5, estado: ESTADOS_SOLICITUD.PENDIENTE }];
     svc.repo = {
         createPendingAsync: async (e) => ({ id: 2, estado: ESTADOS_SOLICITUD.PENDIENTE, ...e }),
         getSentByEmpresaAsync: async (id) => rows.filter(r => r.id_empresa === id),
@@ -28,18 +29,22 @@ function serviceFixture() {
     return svc;
 }
 
-test('admin crea solicitud con empresa autenticada y estado pendiente forzado', async () => {
-    const row = await serviceFixture().createAsync({ id_empresa: 999, id_garage: 5, cantidad_cocheras: 2, estado: 'aceptada' }, admin);
-    assert.deepEqual([row.id_empresa, row.estado], [10, 'pendiente']);
+test('admin debe enviar sede y el body no puede falsificar empresa ni estado', async () => {
+    await assert.rejects(() => serviceFixture().createAsync({ id_garage: 5, cantidad_cocheras: 2 }, admin), { statusCode: 400 });
+    const row = await serviceFixture().createAsync({ id_empresa: 999, id_sede: 7, id_garage: 5, cantidad_cocheras: 2, estado: 'aceptada' }, admin);
+    assert.deepEqual([row.id_sede, row.id_empresa_autorizada, row.estado], [7, 10, 'pendiente']);
+});
+test('admin limitado a sede no puede usar otra', async () => {
+    await assert.rejects(() => serviceFixture().createAsync({ id_sede: 8, id_garage: 5, cantidad_cocheras: 2 }, adminSede), { statusCode: 403 });
 });
 test('descripcion opcional se recorta y valida longitud/tipo', async () => {
     const svc = serviceFixture();
-    assert.equal((await svc.createAsync({ id_garage: 5, cantidad_cocheras: 1, descripcion: ' hola ' }, admin)).descripcion, 'hola');
-    await assert.rejects(() => svc.createAsync({ id_garage: 5, cantidad_cocheras: 1, descripcion: 2 }, admin), { statusCode: 400 });
-    await assert.rejects(() => svc.createAsync({ id_garage: 5, cantidad_cocheras: 1, descripcion: 'x'.repeat(1001) }, admin), { statusCode: 400 });
+    assert.equal((await svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: ' hola ' }, admin)).descripcion, 'hola');
+    await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: 2 }, admin), { statusCode: 400 });
+    await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: 'x'.repeat(1001) }, admin), { statusCode: 400 });
 });
 for (const cantidad of [0, -1, 1.5]) test(`rechaza cantidad inválida ${cantidad}`, async () => {
-    await assert.rejects(() => serviceFixture().createAsync({ id_garage: 5, cantidad_cocheras: cantidad }, admin), { statusCode: 400 });
+    await assert.rejects(() => serviceFixture().createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: cantidad }, admin), { statusCode: 400 });
 });
 test('admin solo ve enviadas de su empresa', async () => {
     assert.deepEqual((await serviceFixture().getSentAsync(admin)).map(r => r.id_empresa), [10]);
@@ -70,7 +75,7 @@ class FakeClient {
     release() { this.released = true; }
 }
 const command = (client, value) => client.commands.some(c => c.sql === value);
-const baseRequest = { id: 1, id_empresa: 10, id_garage: 5, cantidad_cocheras: 3, estado: 'pendiente', descripcion: 'x' };
+const baseRequest = { id: 1, id_sede: 7, id_garage: 5, cantidad_cocheras: 3, estado: 'pendiente', descripcion: 'x' };
 const baseGarage = { id: 5, capacidad: 10, estado: true, Borrado: false, precio_auto: 100, precio_moto: 50, precio_pickup: 150 };
 
 function acceptanceFixture({ request = baseRequest, garage = baseGarage, owns = true, deal = null, used = 2, createError = null, updateCount = 1 } = {}) {
@@ -80,13 +85,14 @@ function acceptanceFixture({ request = baseRequest, garage = baseGarage, owns = 
         if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) return { rows: [], rowCount: 0 };
         if (sql.includes('FROM solicitudes WHERE id=$1 FOR UPDATE')) return { rows: request ? [request] : [], rowCount: request ? 1 : 0 };
         if (sql.includes('FROM usuario_garage')) return { rows: owns ? [{ '?column?': 1 }] : [], rowCount: owns ? 1 : 0 };
+        if (sql.includes('FROM sedes')) return { rows: [{ id: 7, id_empresa: 10 }], rowCount: 1 };
         if (sql.includes('FROM garages')) return { rows: garage ? [garage] : [], rowCount: garage ? 1 : 0 };
         if (sql.startsWith('UPDATE solicitudes')) return { rows: updateCount ? [{ ...request, estado: 'aceptada' }] : [], rowCount: updateCount };
         throw new Error(`SQL inesperado: ${sql}`);
     });
     repo.pool = { connect: async () => client };
     repo.tratoRepo = {
-        getByEmpresaGarageWithClientAsync: async () => deal,
+        getBySedeGarageWithClientAsync: async () => deal,
         sumCantidadByGarageWithClientAsync: async () => used,
         createWithClientAsync: async (entity, sameClient) => {
             assert.equal(sameClient, client); created += 1;
@@ -97,11 +103,11 @@ function acceptanceFixture({ request = baseRequest, garage = baseGarage, owns = 
     return { repo, client, created: () => created };
 }
 
-test('aceptar crea exactamente un trato y copia empresa, garage, cantidad, precios e id_sede null', async () => {
+test('aceptar crea exactamente un trato con sede, garage, cantidad y precios, sin empresa insertada', async () => {
     const fx = acceptanceFixture();
     const result = await fx.repo.acceptAsync(1, owner.id);
     assert.equal(fx.created(), 1);
-    assert.deepEqual(result.trato, { id: 8, id_empresa: 10, id_sede: null, id_garage: 5, cantidad_cocheras: 3, precio_auto: 100, precio_moto: 50, precio_pickup: 150 });
+    assert.deepEqual(result.trato, { id: 8, id_sede: 7, id_garage: 5, cantidad_cocheras: 3, precio_auto: 100, precio_moto: 50, precio_pickup: 150 });
     assert.ok(command(fx.client, 'BEGIN') && command(fx.client, 'COMMIT'));
 });
 test('dueño no acepta solicitud de garage ajeno', async () => {
@@ -131,24 +137,27 @@ test('aceptar hace rollback si la actualización condicional pierde la carrera',
     assert.equal(fx.created(), 1); assert.ok(command(fx.client, 'ROLLBACK'));
 });
 
-function createFixture({ garage = baseGarage, deal = null, pending = null, used = 2 } = {}) {
+function createFixture({ sede = { id: 7, id_empresa: 10 }, garage = baseGarage, deal = null, pending = null, used = 2 } = {}) {
     const repo = new SolicitudEmpresaGarageRepository();
     const client = new FakeClient(async (sql, params) => {
         if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) return { rows: [], rowCount: 0 };
-        if (sql.includes('FROM empresas')) return { rows: [{ id: 10 }], rowCount: 1 };
+        if (sql.includes('FROM sedes')) return { rows: sede ? [sede] : [], rowCount: sede ? 1 : 0 };
         if (sql.includes('FROM garages')) return { rows: garage ? [garage] : [], rowCount: garage ? 1 : 0 };
         if (sql.includes('FROM solicitudes') && sql.includes('estado=$3')) return { rows: pending ? [pending] : [], rowCount: pending ? 1 : 0 };
-        if (sql.startsWith('INSERT INTO solicitudes')) return { rows: [{ id: 3, id_empresa: params[0], estado: params[4] }], rowCount: 1 };
+        if (sql.startsWith('INSERT INTO solicitudes')) return { rows: [{ id: 3, id_sede: params[0], estado: params[4] }], rowCount: 1 };
         throw new Error(`SQL inesperado: ${sql}`);
     });
     repo.pool = { connect: async () => client };
     repo.tratoRepo = {
-        getByEmpresaGarageWithClientAsync: async () => deal,
+        getBySedeGarageWithClientAsync: async () => deal,
         sumCantidadByGarageWithClientAsync: async () => used,
     };
     return { repo, client };
 }
-const createEntity = { id_empresa: 10, id_garage: 5, cantidad_cocheras: 3, descripcion: null };
+const createEntity = { id_sede: 7, id_empresa_autorizada: 10, id_garage: 5, cantidad_cocheras: 3, descripcion: null };
+test('crear rechaza una sede de otra empresa', async () => {
+    await assert.rejects(() => createFixture({ sede: { id: 7, id_empresa: 20 } }).repo.createPendingAsync(createEntity), { statusCode: 403 });
+});
 test('crear bloquea garage y fuerza enum pendiente', async () => {
     const fx = createFixture(); const row = await fx.repo.createPendingAsync(createEntity);
     assert.equal(row.estado, 'pendiente'); assert.ok(fx.client.commands.some(c => /garages WHERE id=\$1 FOR UPDATE/.test(c.sql)));
@@ -169,7 +178,7 @@ test('rechazar y cancelar no crean tratos y preservan descripción', async () =>
     const states = [];
     const client = new FakeClient(async (sql, params) => {
         if (['BEGIN','COMMIT','ROLLBACK'].includes(sql)) return { rows: [], rowCount: 0 };
-        if (sql.includes('SELECT * FROM solicitudes')) return { rows: [baseRequest], rowCount: 1 };
+        if (sql.includes('SELECT * FROM solicitudes') || sql.includes('SELECT so.*')) return { rows: [{ ...baseRequest, id_empresa: 10 }], rowCount: 1 };
         if (sql.includes('usuario_garage')) return { rows: [{}], rowCount: 1 };
         if (sql.startsWith('UPDATE solicitudes')) { states.push(params[0]); return { rows: [{ ...baseRequest, estado: params[0] }], rowCount: 1 }; }
         throw new Error(`SQL inesperado: ${sql}`);
@@ -183,12 +192,12 @@ test('admin no cancela solicitud ajena y transiciones no pendientes devuelven 40
     const repo = new SolicitudEmpresaGarageRepository();
     const client = new FakeClient(async (sql) => {
         if (['BEGIN','ROLLBACK'].includes(sql)) return { rows: [], rowCount: 0 };
-        if (sql.includes('SELECT * FROM solicitudes')) return { rows: [{ ...baseRequest, id_empresa: 20, estado: 'aceptada' }], rowCount: 1 };
+        if (sql.includes('SELECT * FROM solicitudes') || sql.includes('SELECT so.*')) return { rows: [{ ...baseRequest, id_empresa: 20, estado: 'aceptada' }], rowCount: 1 };
         throw new Error('no debe actualizar');
     });
     repo.pool = { connect: async () => client };
     await assert.rejects(() => repo.cancelAsync(1, admin.id_empresa), { statusCode: 403 });
-    const ownClient = new FakeClient(async (sql) => ['BEGIN','ROLLBACK'].includes(sql) ? { rows: [] } : { rows: [{ ...baseRequest, estado: 'rechazada' }], rowCount: 1 });
+    const ownClient = new FakeClient(async (sql) => ['BEGIN','ROLLBACK'].includes(sql) ? { rows: [] } : { rows: [{ ...baseRequest, id_empresa: 10, estado: 'rechazada' }], rowCount: 1 });
     repo.pool = { connect: async () => ownClient };
     await assert.rejects(() => repo.cancelAsync(1, admin.id_empresa), { statusCode: 409 });
 });

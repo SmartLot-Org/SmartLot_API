@@ -5,7 +5,9 @@ import { ESTADOS_SOLICITUD } from '../helpers/estadosSolicitud.js';
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
 
 const DETAIL_SELECT = `
-    SELECT so.*, e.nombre AS empresa_nombre,
+    SELECT so.*, s.id_empresa AS id_empresa,
+           s.nombre AS sede_nombre, s.ubicacion AS sede_ubicacion,
+           e.nombre AS empresa_nombre,
            g.nombre AS garage_nombre, g.ubicacion AS garage_ubicacion,
            g.capacidad AS garage_capacidad, g.estado AS garage_estado,
            g.precio_auto, g.precio_moto, g.precio_pickup,
@@ -13,7 +15,8 @@ const DETAIL_SELECT = `
                SELECT SUM(t.cantidad_cocheras) FROM trato_empresa_garage t WHERE t.id_garage=so.id_garage
            ),0)) AS capacidad_disponible
       FROM solicitudes so
-      JOIN empresas e ON e.id=so.id_empresa
+      JOIN sedes s ON s.id=so.id_sede
+      JOIN empresas e ON e.id=s.id_empresa
       JOIN garages g ON g.id=so.id_garage`;
 
 export default class SolicitudEmpresaGarageRepository {
@@ -26,32 +29,34 @@ export default class SolicitudEmpresaGarageRepository {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            const empresa = (await client.query(
-                'SELECT id FROM empresas WHERE id=$1 AND COALESCE("Borrado",false)=false', [entity.id_empresa]
+            const sede = (await client.query(
+                `SELECT id, id_empresa FROM sedes
+                  WHERE id=$1 AND COALESCE("Borrado",false)=false`, [entity.id_sede]
             )).rows[0];
-            if (!empresa) fail('La empresa no existe o está inactiva.', 404);
+            if (!sede) fail('La sede no existe o esta inactiva.', 404);
+            if (Number(sede.id_empresa) !== Number(entity.id_empresa_autorizada)) fail('La sede no pertenece a la empresa autenticada.', 403);
             const garage = (await client.query(
                 'SELECT * FROM garages WHERE id=$1 FOR UPDATE', [entity.id_garage]
             )).rows[0];
             if (!garage || garage.Borrado === true) fail('El garage no existe.', 404);
-            if (garage.estado === false) fail('El garage no está activo.', 409);
-            if (await this.tratoRepo.getByEmpresaGarageWithClientAsync(entity.id_empresa, entity.id_garage, client)) {
-                fail('Ya existe un trato entre la empresa y el garage.', 409);
+            if (garage.estado === false) fail('El garage no esta activo.', 409);
+            if (await this.tratoRepo.getBySedeGarageWithClientAsync(entity.id_sede, entity.id_garage, client)) {
+                fail('Ya existe un trato entre la sede y el garage.', 409);
             }
             const pending = (await client.query(
                 `SELECT id FROM solicitudes
-                  WHERE id_empresa=$1 AND id_garage=$2 AND estado=$3
-                  LIMIT 1`, [entity.id_empresa, entity.id_garage, ESTADOS_SOLICITUD.PENDIENTE]
+                  WHERE id_sede=$1 AND id_garage=$2 AND estado=$3
+                  LIMIT 1`, [entity.id_sede, entity.id_garage, ESTADOS_SOLICITUD.PENDIENTE]
             )).rows[0];
-            if (pending) fail('Ya existe una solicitud pendiente para ese garage.', 409);
+            if (pending) fail('Ya existe una solicitud pendiente para esa sede y garage.', 409);
             const comprometidas = await this.tratoRepo.sumCantidadByGarageWithClientAsync(entity.id_garage, client);
             if (entity.cantidad_cocheras > Number(garage.capacidad) - comprometidas) {
                 fail('La cantidad solicitada supera las cocheras disponibles.', 409);
             }
             const result = await client.query(
-                `INSERT INTO solicitudes (id_empresa,id_garage,descripcion,cantidad_cocheras,estado)
+                `INSERT INTO solicitudes (id_sede,id_garage,descripcion,cantidad_cocheras,estado)
                  VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-                [entity.id_empresa, entity.id_garage, entity.descripcion, entity.cantidad_cocheras, ESTADOS_SOLICITUD.PENDIENTE]
+                [entity.id_sede, entity.id_garage, entity.descripcion, entity.cantidad_cocheras, ESTADOS_SOLICITUD.PENDIENTE]
             );
             await client.query('COMMIT');
             return result.rows[0];
@@ -61,8 +66,9 @@ export default class SolicitudEmpresaGarageRepository {
         } finally { client.release(); }
     };
 
-    getSentByEmpresaAsync = async (idEmpresa) => (await this.pool.query(
-        `${DETAIL_SELECT} WHERE so.id_empresa=$1 ORDER BY so.created_at DESC`, [idEmpresa]
+    getSentByEmpresaAsync = async (idEmpresa, idSede = null) => (await this.pool.query(
+        `${DETAIL_SELECT} WHERE s.id_empresa=$1 AND ($2::int IS NULL OR so.id_sede=$2) ORDER BY so.created_at DESC`,
+        [idEmpresa, idSede]
     )).rows;
 
     getReceivedByOwnerAsync = async (idUsuario) => (await this.pool.query(
@@ -85,27 +91,30 @@ export default class SolicitudEmpresaGarageRepository {
             await client.query('BEGIN');
             const solicitud = (await client.query('SELECT * FROM solicitudes WHERE id=$1 FOR UPDATE', [id])).rows[0];
             if (!solicitud) fail('La solicitud no existe.', 404);
-            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no está pendiente.', 409);
+            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no esta pendiente.', 409);
             const owns = (await client.query(
                 'SELECT 1 FROM usuario_garage WHERE id_usuario=$1 AND id_garage=$2 LIMIT 1',
                 [idUsuario, solicitud.id_garage]
             )).rowCount > 0;
             if (!owns) fail('No tiene permisos sobre el garage de la solicitud.', 403);
+            const sede = (await client.query(
+                `SELECT id, id_empresa FROM sedes WHERE id=$1 AND COALESCE("Borrado",false)=false`, [solicitud.id_sede]
+            )).rows[0];
+            if (!sede) fail('La sede no existe o esta inactiva.', 409);
             const garage = (await client.query(
                 'SELECT * FROM garages WHERE id=$1 AND COALESCE("Borrado",false)=false FOR UPDATE', [solicitud.id_garage]
             )).rows[0];
             if (!garage) fail('El garage no existe.', 404);
-            if (garage.estado === false) fail('El garage no está activo.', 409);
-            if (await this.tratoRepo.getByEmpresaGarageWithClientAsync(solicitud.id_empresa, solicitud.id_garage, client)) {
-                fail('Ya existe un trato entre la empresa y el garage.', 409);
+            if (garage.estado === false) fail('El garage no esta activo.', 409);
+            if (await this.tratoRepo.getBySedeGarageWithClientAsync(solicitud.id_sede, solicitud.id_garage, client)) {
+                fail('Ya existe un trato entre la sede y el garage.', 409);
             }
             const comprometidas = await this.tratoRepo.sumCantidadByGarageWithClientAsync(solicitud.id_garage, client);
             if (Number(solicitud.cantidad_cocheras) > Number(garage.capacidad) - comprometidas) {
                 fail('La cantidad solicitada supera las cocheras disponibles.', 409);
             }
             const trato = await this.tratoRepo.createWithClientAsync({
-                id_empresa: solicitud.id_empresa,
-                id_sede: null,
+                id_sede: solicitud.id_sede,
                 id_garage: solicitud.id_garage,
                 cantidad_cocheras: solicitud.cantidad_cocheras,
                 precio_auto: Number(garage.precio_auto ?? 0),
@@ -116,11 +125,12 @@ export default class SolicitudEmpresaGarageRepository {
                 'UPDATE solicitudes SET estado=$1 WHERE id=$2 AND estado=$3 RETURNING *',
                 [ESTADOS_SOLICITUD.ACEPTADA, id, ESTADOS_SOLICITUD.PENDIENTE]
             );
-            if (updated.rowCount !== 1) fail('La solicitud ya no está pendiente.', 409);
+            if (updated.rowCount !== 1) fail('La solicitud ya no esta pendiente.', 409);
             await client.query('COMMIT');
             return { solicitud: updated.rows[0], trato };
         } catch (error) {
             await client.query('ROLLBACK');
+            if (error.code === '23505') fail('Ya existe un trato entre la sede y el garage.', 409);
             throw error;
         } finally { client.release(); }
     };
@@ -131,7 +141,7 @@ export default class SolicitudEmpresaGarageRepository {
             await client.query('BEGIN');
             const solicitud = (await client.query('SELECT * FROM solicitudes WHERE id=$1 FOR UPDATE', [id])).rows[0];
             if (!solicitud) fail('La solicitud no existe.', 404);
-            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no está pendiente.', 409);
+            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no esta pendiente.', 409);
             const owns = (await client.query(
                 'SELECT 1 FROM usuario_garage WHERE id_usuario=$1 AND id_garage=$2 LIMIT 1', [idUsuario, solicitud.id_garage]
             )).rowCount > 0;
@@ -140,26 +150,31 @@ export default class SolicitudEmpresaGarageRepository {
                 'UPDATE solicitudes SET estado=$1 WHERE id=$2 AND estado=$3 RETURNING *',
                 [ESTADOS_SOLICITUD.RECHAZADA, id, ESTADOS_SOLICITUD.PENDIENTE]
             );
-            if (updated.rowCount !== 1) fail('La solicitud ya no está pendiente.', 409);
+            if (updated.rowCount !== 1) fail('La solicitud ya no esta pendiente.', 409);
             await client.query('COMMIT');
             return updated.rows[0];
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
     };
 
-    cancelAsync = async (id, idEmpresa) => {
+    cancelAsync = async (id, idEmpresa, idSede = null) => {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            const solicitud = (await client.query('SELECT * FROM solicitudes WHERE id=$1 FOR UPDATE', [id])).rows[0];
+            const solicitud = (await client.query(
+                `SELECT so.*, s.id_empresa FROM solicitudes so
+                  JOIN sedes s ON s.id=so.id_sede WHERE so.id=$1 FOR UPDATE OF so`, [id]
+            )).rows[0];
             if (!solicitud) fail('La solicitud no existe.', 404);
-            if (Number(solicitud.id_empresa) !== Number(idEmpresa)) fail('No tiene acceso a esta solicitud.', 403);
-            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no está pendiente.', 409);
+            if (Number(solicitud.id_empresa) !== Number(idEmpresa) || (idSede && Number(solicitud.id_sede) !== Number(idSede))) {
+                fail('No tiene acceso a esta solicitud.', 403);
+            }
+            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no esta pendiente.', 409);
             const updated = await client.query(
                 'UPDATE solicitudes SET estado=$1 WHERE id=$2 AND estado=$3 RETURNING *',
                 [ESTADOS_SOLICITUD.CANCELADA, id, ESTADOS_SOLICITUD.PENDIENTE]
             );
-            if (updated.rowCount !== 1) fail('La solicitud ya no está pendiente.', 409);
+            if (updated.rowCount !== 1) fail('La solicitud ya no esta pendiente.', 409);
             await client.query('COMMIT');
             return updated.rows[0];
         } catch (error) { await client.query('ROLLBACK'); throw error; }
