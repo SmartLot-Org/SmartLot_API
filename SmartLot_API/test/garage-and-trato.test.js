@@ -20,15 +20,14 @@ function garageService({ relationFails = false } = {}) {
     getByIdAsync: async (id, user) => user?.id === 999 ? null : ({ id, capacidad: 10, dias: ['Lunes'] }),
   };
   svc.usuarioGarageService = { createWithClientAsync: async () => { if (relationFails) throw new Error('relation failed'); } };
-  svc.sedeService = { getByIdAsync: async () => ({ id: 7 }) };
   return { svc, commands };
 }
 
 const garage = { nombre: 'Garage', capacidad: 10, dias: ['Lunes'], precio_auto: 10, precio_moto: 5, precio_pickup: 15 };
 test('dueño crea garage sin sede y queda relacionado en la misma transacción', async () => {
   const { svc, commands } = garageService();
-  const created = await svc.createAsync({ ...garage, id_sede: 88 }, owner);
-  assert.equal(created.id_sede, null);
+  const created = await svc.createAsync(garage, owner);
+  assert.equal(Object.hasOwn(created, 'id_sede'), false);
   assert.deepEqual(commands.slice(0, 2), ['BEGIN', 'COMMIT']);
 });
 test('si falla usuario_garage se revierte y no queda garage huérfano', async () => {

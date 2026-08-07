@@ -1,6 +1,5 @@
 // usuarioGarageRepository.js
 import pool from '../database/db.js';
-import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class UsuarioGarageRepository {
     constructor() {
@@ -20,15 +19,12 @@ export default class UsuarioGarageRepository {
 
     getUsuariosByGarageIdAsync = async (id_garage, requestingUser = null) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 's.id', empresaColumn: 's.id_empresa' });
             const result = await pool.query(
                 `SELECT u.* 
                  FROM usuarios u
                  INNER JOIN usuario_garage ug ON u.id = ug.id_usuario
-                 INNER JOIN garages g ON g.id = ug.id_garage
-                 INNER JOIN sedes s ON s.id = g.id_sede
-                 WHERE ug.id_garage = $1 ${tenant.sql}`,
-                [id_garage, ...tenant.params]
+                 WHERE ug.id_garage = $1`,
+                [id_garage]
             );
             return result.rows;
         } catch (error) {

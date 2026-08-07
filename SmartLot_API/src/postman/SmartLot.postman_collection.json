@@ -383,7 +383,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\r\n  \"nombre\": \"Garage Centro\",\r\n  \"ubicacion\": \"Ala Norte, Sector 3\",\r\n  \"estado\": true,\r\n  \"capacidad\": 50,\r\n  \"id_sede\": 1,\r\n  \"dias\": [\"Lunes\", \"Martes\"],\r\n  \"precio_pickup\": 1500,\r\n  \"precio_auto\": 1200,\r\n  \"precio_moto\": 700\r\n}",
+							"raw": "{\r\n  \"nombre\": \"Garage Centro\",\r\n  \"ubicacion\": \"Ala Norte, Sector 3\",\r\n  \"estado\": true,\r\n  \"capacidad\": 50,\r\n  \"dias\": [\"Lunes\", \"Martes\"],\r\n  \"precio_pickup\": 1500,\r\n  \"precio_auto\": 1200,\r\n  \"precio_moto\": 700\r\n}",
 							"options": {
 								"raw": {
 									"language": "json"

@@ -56,14 +56,14 @@ const queries = [
         LIMIT 20
     `],
     ['garages', `
-        SELECT g.id, g.nombre, g.id_sede, g.capacidad, g.estado,
+        SELECT g.id, g.nombre, g.capacidad, g.estado,
                COALESCE(SUM(t.cantidad_cocheras), 0)::int AS comprometidas,
                ARRAY_REMOVE(ARRAY_AGG(ug.id_usuario), NULL) AS user_ids
         FROM garages g
         LEFT JOIN usuario_garage ug ON ug.id_garage = g.id
         LEFT JOIN trato_empresa_garage t ON t.id_garage = g.id
         WHERE COALESCE(g."Borrado", false) = false
-        GROUP BY g.id, g.nombre, g.id_sede, g.capacidad, g.estado
+        GROUP BY g.id, g.nombre, g.capacidad, g.estado
         ORDER BY g.id DESC
         LIMIT 30
     `],

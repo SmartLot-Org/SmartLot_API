@@ -55,10 +55,16 @@ export default class UsuarioRepository {
             const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
                 `SELECT u.*, r.tipo_rol,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN ug.id_garage ELSE NULL END as id_garage
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
                  FROM usuarios u
                  LEFT JOIN roles r ON r.id = u.id_rol
-                 LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
+                 LEFT JOIN LATERAL (
+                    SELECT MIN(ug.id_garage) AS id_garage,
+                           ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                    FROM usuario_garage ug
+                    WHERE ug.id_usuario = u.id
+                 ) garages ON true
                  WHERE COALESCE(u."Borrado", false) = false ${tenant.sql}
                  ORDER BY u.id`,
                 [...tenant.params]
@@ -72,10 +78,16 @@ export default class UsuarioRepository {
             const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
                 `SELECT u.*, r.tipo_rol,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN ug.id_garage ELSE NULL END as id_garage
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
                  FROM usuarios u
                  LEFT JOIN roles r ON r.id = u.id_rol
-                 LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
+                 LEFT JOIN LATERAL (
+                    SELECT MIN(ug.id_garage) AS id_garage,
+                           ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                    FROM usuario_garage ug
+                    WHERE ug.id_usuario = u.id
+                 ) garages ON true
                  WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
                 [id, ...tenant.params]
             );
@@ -87,10 +99,16 @@ export default class UsuarioRepository {
         try {
             const result = await pool.query(
                 `SELECT u.*, r.tipo_rol,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN ug.id_garage ELSE NULL END as id_garage
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
+                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
                  FROM usuarios u
                  LEFT JOIN roles r ON r.id = u.id_rol
-                 LEFT JOIN usuario_garage ug ON u.id = ug.id_usuario
+                 LEFT JOIN LATERAL (
+                    SELECT MIN(ug.id_garage) AS id_garage,
+                           ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                    FROM usuario_garage ug
+                    WHERE ug.id_usuario = u.id
+                 ) garages ON true
                  WHERE u.email = $1 AND COALESCE(u."Borrado", false) = false`,
                 [email]
             );

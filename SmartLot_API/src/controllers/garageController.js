@@ -95,7 +95,7 @@ router.get('/:id/cercanos', requireRole(1, 4), async (req, res) => {
     res.status(200).json(garages);
 });
 
-// GET DISTANCIA A SEDE - Distancia y tiempo entre garage y su sede usando Distance Matrix
+// GET DISTANCIA A SEDE - La sede es solo una referencia, no pertenece al garage.
 router.get('/:id/distancia-sede', async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
@@ -105,13 +105,14 @@ router.get('/:id/distancia-sede', async (req, res) => {
         console.error(`distancia-sede: garage ${id} no encontrado (usuario ${req.usuario?.id})`);
         throwError('Garage no encontrado.', 404);
     }
-    if (!garage.id_sede) throwError('El garage no tiene una sede asociada.', 400);
     if (!garage.latitud || !garage.longitud) throwError('El garage no tiene coordenadas registradas.', 400);
 
-    const sede = await svc.sedeService.getByIdAsync(garage.id_sede);
+    const sedeId = Number(req.query.sede_id ?? req.usuario?.id_sede);
+    if (!Number.isInteger(sedeId) || sedeId <= 0) throwError('sede_id debe ser un entero valido.', 400);
+    const sede = await svc.sedeService.getByIdAsync(sedeId, req.usuario);
     if (!sede) {
-        console.error(`distancia-sede: sede ${garage.id_sede} no encontrada para garage ${id}`);
-        throwError('Sede no encontrada.', 404);
+        console.error(`distancia-sede: sede ${sedeId} no encontrada o sin permisos para garage ${id}`);
+        throwError('Sede no encontrada o sin permisos.', 404);
     }
     if (!sede.latitud || !sede.longitud) throwError('La sede no tiene coordenadas registradas.', 400);
 
@@ -141,9 +142,8 @@ router.get('/:id/distancia-sede', async (req, res) => {
 
 // CREATE (POST)
 router.post('', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
-    const { id_sede, nombre, piso, ubicacion, latitud, longitud, capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
+    const { nombre, piso, ubicacion, latitud, longitud, capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
     if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
-    if (id_sede !== undefined && id_sede !== null && !isValidId(String(id_sede))) throwError('El id_sede debe ser un número válido.', 400);
     if (!isValidPositiveNumber(capacidad)) throwError('La capacidad debe ser un número positivo.', 400);
     if (estado !== undefined && typeof estado !== 'boolean') throwError('El estado debe ser un valor booleano (true o false).', 400);
     if (hora_apertura !== undefined && hora_apertura !== null && !isValidTime(hora_apertura)) throwError('La hora de apertura debe tener formato HH:MM.', 400);
@@ -157,7 +157,7 @@ router.post('', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), 
 
     // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
     const safeEntity = {
-        id_sede, nombre, piso, ubicacion, latitud, longitud,
+        nombre, piso, ubicacion, latitud, longitud,
         capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
     const data = await svc.createAsync(safeEntity, req.usuario);
@@ -169,9 +169,8 @@ router.post('', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), 
 router.put('/:id', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
     await assertGarageControl(req, Number(req.params.id));
-    const { id_sede, nombre, piso, ubicacion, latitud, longitud, capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
+    const { nombre, piso, ubicacion, latitud, longitud, capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto } = req.body;
     if (nombre !== undefined && !isValidString(nombre)) throwError('El nombre no puede estar vacío.', 400);
-    if (id_sede !== undefined && !isValidId(String(id_sede))) throwError('El id_sede debe ser un número válido.', 400);
     if (capacidad !== undefined && (typeof capacidad !== 'number' || capacidad < 0)) throwError('La capacidad debe ser un número mayor o igual a 0.', 400);
     if (estado !== undefined && typeof estado !== 'boolean') throwError('El estado debe ser un valor booleano (true o false).', 400);
     if (hora_apertura !== undefined && hora_apertura !== null && !isValidTime(hora_apertura)) throwError('La hora de apertura debe tener formato HH:MM.', 400);
@@ -187,7 +186,7 @@ router.put('/:id', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN
 
     // Lista blanca de campos: evita asignación masiva de contadores de ocupación.
     const safeEntity = {
-        id_sede, nombre, piso, ubicacion, latitud, longitud,
+        nombre, piso, ubicacion, latitud, longitud,
         capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
     const data = await svc.updateAsync(parseInt(req.params.id, 10), safeEntity);

@@ -4,7 +4,6 @@ import ReservaRepository from '../repositories/reservaRepository.js';
 import UsuarioService from './usuarioService.js';
 import GarageService from './garageService.js';
 import VehiculoService from './vehiculoService.js';
-import SedeService from './sedeService.js';
 import { isValidDiaSemana } from '../helpers/validatorHelper.js';
 
 export default class ReservaService {
@@ -14,7 +13,6 @@ export default class ReservaService {
         this.usuarioService = new UsuarioService();
         this.garageService = new GarageService();
         this.vehiculoService = new VehiculoService();
-        this.sedeService = new SedeService();
     }
 
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
@@ -107,7 +105,7 @@ export default class ReservaService {
         }
 
         this._validarCamposObligatorios(entity);
-        await this._validarRelacionesAsync(entity);
+        await this._validarRelacionesAsync(entity, requestingUser);
         this._validarFechasAsync(entity);
         await this._validarDisponibilidadAsync(entity);
         await this._validarMaximoReservasDiariasAsync(entity);
@@ -185,7 +183,7 @@ export default class ReservaService {
         const mergedEntity = { ...current, ...entity };
 
         this._validarCamposObligatorios(mergedEntity);
-        await this._validarRelacionesAsync(mergedEntity);
+        await this._validarRelacionesAsync(mergedEntity, requestingUser);
         this._validarFechasAsync(mergedEntity);
         await this._validarDisponibilidadAsync(mergedEntity, id);
         await this._validarMaximoReservasDiariasAsync(mergedEntity, id);
@@ -500,7 +498,7 @@ export default class ReservaService {
         }
     }
 
-    _validarRelacionesAsync = async (entity) => {
+    _validarRelacionesAsync = async (entity, requestingUser = null) => {
         const errores = [];
         let usuario = null;
         let garage = null;
@@ -516,7 +514,7 @@ export default class ReservaService {
         }
 
         if (entity.id_garage) {
-            garage = await this.garageService.getByIdAsync(entity.id_garage);
+            garage = await this.garageService.getByIdAsync(entity.id_garage, requestingUser);
             if (!garage) {
                 errores.push(`El garage no existe.`);
             } else {
@@ -534,13 +532,6 @@ export default class ReservaService {
                 errores.push(`El vehiculo con ID ${entity.id_vehiculo} no existe.`);
             } else if (usuario && vehiculo.id_usuario !== usuario.id) {
                 errores.push(`El vehiculo con ID ${entity.id_vehiculo} no pertenece al usuario con ID ${entity.id_usuario}.`);
-            }
-        }
-
-        if (usuario && usuario.id_empresa && garage && garage.id_sede) {
-            const sede = await this.sedeService.getByIdAsync(garage.id_sede);
-            if (sede && Number(sede.id_empresa) !== Number(usuario.id_empresa)) {
-                errores.push(`El garage no pertenece a la misma empresa que el usuario.`);
             }
         }
 

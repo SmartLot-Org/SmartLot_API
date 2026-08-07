@@ -91,9 +91,9 @@ export default class GarageRepository {
     createAsync = async (entity) => {
         try {
             const result = await pool.query(
-                `INSERT INTO garages (id_sede, nombre, piso, ubicacion, latitud, longitud, estado, capacidad, capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas, hora_apertura, hora_cierre, precio_pickup, precio_auto, precio_moto)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *`,
-                [entity.id_sede, entity.nombre, entity.piso, entity.ubicacion, entity.latitud ?? null, entity.longitud ?? null, entity.estado,
+                `INSERT INTO garages (nombre, piso, ubicacion, latitud, longitud, estado, capacidad, capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas, hora_apertura, hora_cierre, precio_pickup, precio_auto, precio_moto)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+                [entity.nombre, entity.piso, entity.ubicacion, entity.latitud ?? null, entity.longitud ?? null, entity.estado,
                 entity.capacidad, entity.capacidad_para_no_reservas, entity.capacidad_reservas, entity.ocupacion_reservas, entity.ocupacion_no_reservas,
                 entity.hora_apertura, entity.hora_cierre, entity.precio_pickup ?? null, entity.precio_auto ?? null, entity.precio_moto ?? null]
             );
@@ -114,11 +114,11 @@ export default class GarageRepository {
 
     createWithClientAsync = async (entity, client) => {
         const result = await client.query(
-            `INSERT INTO garages (id_sede, nombre, piso, ubicacion, latitud, longitud, estado, capacidad,
+            `INSERT INTO garages (nombre, piso, ubicacion, latitud, longitud, estado, capacidad,
                 capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas,
                 hora_apertura, hora_cierre, precio_pickup, precio_auto, precio_moto)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15) RETURNING *`,
-            [entity.id_sede ?? null, entity.nombre, entity.piso ?? null, entity.ubicacion, entity.latitud ?? null,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,$10,$11,$12,$13,$14) RETURNING *`,
+            [entity.nombre, entity.piso ?? null, entity.ubicacion, entity.latitud ?? null,
              entity.longitud ?? null, entity.estado ?? true, entity.capacidad, entity.capacidad_para_no_reservas ?? null,
              entity.capacidad_reservas ?? null, entity.hora_apertura ?? null, entity.hora_cierre ?? null,
              entity.precio_pickup ?? null, entity.precio_auto ?? null, entity.precio_moto ?? null]
@@ -138,28 +138,26 @@ export default class GarageRepository {
         try {
             result = await pool.query(
             `UPDATE garages SET 
-                id_sede=$1, 
-                nombre=$2, 
-                piso=$3, 
-                ubicacion=$4, 
-                latitud=$5,
-                longitud=$6,
-                estado=$7,
-                capacidad=$8, 
-                capacidad_para_no_reservas=$9, 
-                capacidad_reservas=$10, 
-                ocupacion_reservas = $11, 
-                ocupacion_no_reservas = $12,
-                hora_apertura=$13,
-                hora_cierre=$14,
-                precio_pickup=$15,
-                precio_auto=$16,
-                precio_moto=$17
-             WHERE id=$18
+                nombre=$1,
+                piso=$2,
+                ubicacion=$3,
+                latitud=$4,
+                longitud=$5,
+                estado=$6,
+                capacidad=$7,
+                capacidad_para_no_reservas=$8,
+                capacidad_reservas=$9,
+                ocupacion_reservas = $10,
+                ocupacion_no_reservas = $11,
+                hora_apertura=$12,
+                hora_cierre=$13,
+                precio_pickup=$14,
+                precio_auto=$15,
+                precio_moto=$16
+             WHERE id=$17
                AND COALESCE("Borrado", false) = false
              RETURNING *`,
             [
-                entity.id_sede, 
                 entity.nombre, 
                 entity.piso, 
                 entity.ubicacion, 

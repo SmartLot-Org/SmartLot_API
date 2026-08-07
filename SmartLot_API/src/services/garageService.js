@@ -30,7 +30,6 @@ export default class GarageService {
     getOcupacionNoReservaAsync = async (id) => await this.repo.getOcupacionNoReservaAsync(id);
 
     createAsync = async (entity, usuario) => {
-        if (hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) entity = { ...entity, id_sede: null };
         await this._validarRelacionesAsync(entity);
         this._validarPrecios(entity);
         this._validarDiasGarage(entity);
@@ -38,7 +37,7 @@ export default class GarageService {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            const garage = await this.repo.createWithClientAsync({ ...entity, id_sede: null }, client);
+            const garage = await this.repo.createWithClientAsync(entity, client);
             await this.usuarioGarageService.createWithClientAsync(usuario.id, garage.id, client);
             await client.query('COMMIT');
             return garage;
@@ -144,21 +143,10 @@ export default class GarageService {
     }
 
     /**
-     * Valida que las entidades relacionadas (sede) existan en la BD
-     * y que las reglas de capacidad se cumplan.
+     * Valida las reglas de capacidad.
      * Lanza un error descriptivo si alguna validación falla.
      */
     _validarRelacionesAsync = async (entity) => {
-        // Validar que la sede exista
-        if (entity.id_sede) {
-            const sede = await this.sedeService.getByIdAsync(entity.id_sede);
-            if (!sede) {
-                const error = new Error(`La sede con ID ${entity.id_sede} no existe.`);
-                error.statusCode = 400;
-                throw error;
-            }
-        }
-
         // Validar reglas de capacidad
         if (entity.capacidad && entity.capacidad_reservas) {
             if (entity.capacidad_reservas > entity.capacidad) {
