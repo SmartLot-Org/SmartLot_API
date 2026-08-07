@@ -11,7 +11,7 @@
     "db-test": "node ./src/database/db.js",
     "apptest": "node ./src/appTest.js",
     "app": "node ./src/app.js",
-    "nodemailer": "set NODE_TLS_REJECT_UNAUTHORIZED=0&&node ./scripts/check_nodemailer.cjs",
+    "testEmail": "set NODE_TLS_REJECT_UNAUTHORIZED=0&&node ./scripts/check_nodemailer.cjs",
     "pre-deploy": "node ./scripts/pre-deploy.cjs",
     "check:env": "node ./scripts/check-env.cjs",
     "check:syntax": "node ./scripts/check-syntax.cjs",
@@ -34,7 +34,6 @@
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.3",
     "mailtrap": "^4.6.0",
-    "nodemailer": "^8.0.11",
     "pg": "^8.20.0",
     "routes": "^2.1.0"
   }

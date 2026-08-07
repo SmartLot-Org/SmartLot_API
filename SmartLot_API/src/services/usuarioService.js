@@ -270,8 +270,11 @@ export default class UsuarioService {
                 await client.query('COMMIT');
 
                 const nombreCompleto = `${nuevoUsuario.nombre ?? ''} ${nuevoUsuario.apellido ?? ''}`.trim() || 'Usuario';
-                enviarCorreo(nuevoUsuario.email, 'Bienvenido a SmartLot', plantillaBienvenida(nombreCompleto, nuevoUsuario.email))
-                    .catch(err => console.error('Error al enviar correo de bienvenida:', err));
+                try {
+                    await enviarCorreo(nuevoUsuario.email, 'Bienvenido a SmartLot', plantillaBienvenida(nombreCompleto, nuevoUsuario.email));
+                } catch (err) {
+                    console.error('Error al enviar correo de bienvenida:', err);
+                }
 
                 return nuevoUsuario;
             } catch (error) {
@@ -284,8 +287,11 @@ export default class UsuarioService {
             const nuevoUsuario = await this.repo.createAsync(entity);
 
             const nombreCompleto = `${nuevoUsuario.nombre ?? ''} ${nuevoUsuario.apellido ?? ''}`.trim() || 'Usuario';
-            enviarCorreo(nuevoUsuario.email, 'Bienvenido a SmartLot', plantillaBienvenida(nombreCompleto, nuevoUsuario.email))
-                .catch(err => console.error('Error al enviar correo de bienvenida:', err));
+            try {
+                await enviarCorreo(nuevoUsuario.email, 'Bienvenido a SmartLot', plantillaBienvenida(nombreCompleto, nuevoUsuario.email));
+            } catch (err) {
+                console.error('Error al enviar correo de bienvenida:', err);
+            }
 
             return nuevoUsuario;
         }
@@ -363,8 +369,11 @@ export default class UsuarioService {
         const result = await this.repo.updateContraseñaAsync(id, hash, requestingUser?.id ?? null);
 
         const nombreCompleto = `${current.nombre ?? ''} ${current.apellido ?? ''}`.trim() || 'Usuario';
-        enviarCorreo(current.email, 'Contraseña Actualizada - SmartLot', plantillaCambioContraseña(nombreCompleto))
-            .catch(err => console.error('Error al enviar correo de cambio de contraseña:', err));
+        try {
+            await enviarCorreo(current.email, 'Contraseña Actualizada - SmartLot', plantillaCambioContraseña(nombreCompleto));
+        } catch (err) {
+            console.error('Error al enviar correo de cambio de contraseña:', err);
+        }
 
         return result;
     }

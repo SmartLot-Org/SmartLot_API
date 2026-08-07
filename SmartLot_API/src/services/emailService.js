@@ -1,16 +1,10 @@
 import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');
 
-import nodemailer from 'nodemailer';
+import { MailtrapClient } from 'mailtrap';
 
-const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    }
+const mailtrapClient = new MailtrapClient({
+    token: (process.env.EMAIL_PASS || '').trim()
 });
 
 const ESTILOS_BASE = `
@@ -101,14 +95,24 @@ export const plantillaCambioContraseña = (nombre) => `
 
 export const enviarCorreo = async (destinatario, asunto, contenidoHtml) => {
     try {
-        const info = await transporter.sendMail({
-            from: `"SmartLot Company" <${process.env.EMAIL_USER}>`,
-            to: destinatario,
+        const info = await mailtrapClient.send({
+            from: {
+                name: 'SmartLot Company',
+                email: process.env.EMAIL_USER
+            },
+            to: [{ email: destinatario }],
             subject: asunto,
             html: contenidoHtml
         });
-        console.log(`Correo enviado exitosamente a ${destinatario}. ID: ${info.messageId}`);
-        return { success: true, messageId: info.messageId };
+        if (!info.success) {
+            const detalle = (info.errors || []).join(', ');
+            throw new Error(detalle || 'La API de Mailtrap rechazó el envío.');
+        }
+        const messageId = Array.isArray(info.message_ids) && info.message_ids.length > 0
+            ? info.message_ids[0]
+            : 'n/a';
+        console.log(`Correo enviado exitosamente a ${destinatario}. ID: ${messageId}`);
+        return { success: true, messageId };
     } catch (error) {
         console.error('Error en el servicio de correos:', error);
         throw new Error('No se pudo enviar el correo.');
