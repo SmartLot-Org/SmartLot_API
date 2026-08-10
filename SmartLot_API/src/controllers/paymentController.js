@@ -152,6 +152,35 @@ router.post('/preference', async (req, res, next) => {
   }
 });
 
+router.get('/webhook-events', async (req, res, next) => {
+  try {
+    const { procesado, limite = 100 } = req.query;
+
+    const params = [];
+    let where = '';
+    if (procesado !== undefined) {
+      params.push(procesado === 'true' || procesado === '1');
+      where = ` WHERE procesado = $${params.length}`;
+    }
+    params.push(Math.min(Number(limite) || 100, 500));
+
+    const query = `
+      SELECT mp_event_id, tipo_evento, mp_payment_id, payload, firma_valida,
+             procesado, error_procesamiento, fecha_recepcion, fecha_procesamiento
+      FROM webhook_eventos
+      ${where}
+      ORDER BY fecha_recepcion DESC
+      LIMIT $${params.length}
+    `;
+
+    const result = await pool.query(query, params);
+
+    res.json({ eventos: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:paymentId', async (req, res, next) => {
   try {
     const { paymentId } = req.params;
