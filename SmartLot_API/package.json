@@ -7,7 +7,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "node --test",
+    "test": "node --experimental-test-module-mocks --test",
+    "test:mp": "node --experimental-test-module-mocks --test test/mp-service.test.js test/mp-controller.test.js test/mp-integration.test.js",
     "db-test": "node ./src/database/db.js",
     "apptest": "node ./src/appTest.js",
     "app": "node ./src/app.js",
@@ -34,7 +35,11 @@
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.3",
     "mailtrap": "^4.6.0",
+    "mercadopago": "^3.3.0",
     "pg": "^8.20.0",
     "routes": "^2.1.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
   }
 }

@@ -3,6 +3,7 @@ import express 	from "express";
 import cors 	from "cors";
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { pathToFileURL } from 'url';
 
 import EmpresaController   from "./controllers/empresaController.js"
 import GarageController    from "./controllers/garageController.js"
@@ -17,6 +18,7 @@ import ConflictoController from "./controllers/ConflictoController.js"
 import AuthController      from "./controllers/AuthController.js"
 import TratoEmpresaGarageController from "./controllers/tratoEmpresaGarageController.js"
 import SolicitudEmpresaGarageController from "./controllers/solicitudEmpresaGarageController.js"
+import PaymentController from "./controllers/paymentController.js"
 import authMiddleware      from "./middlewares/authMiddleware.js"
 import errorHandler       from "./middlewares/errorHandler.js"
 
@@ -34,7 +36,10 @@ const port = process.env.PORT || 3000;
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000', credentials: true }));
 app.use(cookieParser());
-app.use(express.json({ limit: '10kb' }));
+app.use(express.json({
+    limit: '10kb',
+    verify: (req, res, buf) => { req.rawBody = buf; }
+}));
 
 app.use("/api/empresa", authMiddleware, EmpresaController);
 app.use("/api/garage", authMiddleware, GarageController);
@@ -50,15 +55,29 @@ app.use("/api/conflicto", authMiddleware, ConflictoController);
 app.use("/api/trato-empresa-garage", authMiddleware, TratoEmpresaGarageController);
 app.use("/api/solicitud-empresa-garage", authMiddleware, SolicitudEmpresaGarageController);
 
+// Payment routes - webhook is public, others require auth
+app.use("/api/payments", (req, res, next) => {
+    if (req.path === '/webhook' && req.method === 'POST') {
+        return next();
+    }
+    authMiddleware(req, res, next);
+}, PaymentController);
+
 app.use(errorHandler);
 
-const server = app.listen(port, () => {
-    console.log("server.js");
-    console.log(`Listening on http://localhost:${port}`)
-});
+const isMainModule = !process.argv[1] || import.meta.url === pathToFileURL(process.argv[1]).href;
 
-server.on('error', (error) => {
-    console.error('Server error:', error);
-    process.exit(1);
-});
+if (isMainModule) {
+    const server = app.listen(port, () => {
+        console.log("server.js");
+        console.log(`Listening on http://localhost:${port}`)
+    });
+
+    server.on('error', (error) => {
+        console.error('Server error:', error);
+        process.exit(1);
+    });
+}
+
+export default app;
   
