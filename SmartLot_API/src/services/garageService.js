@@ -61,6 +61,8 @@ export default class GarageService {
 
     deleteAsync = async (id) => await this.repo.deleteAsync(id);
 
+    restoreAsync = async (id, requestingUser = null) => await this.repo.restoreAsync(id, requestingUser);
+
     getDiasAsync = async (id_garage) => {
         const garage = await this.repo.getByIdAsync(id_garage);
         if (!garage) {

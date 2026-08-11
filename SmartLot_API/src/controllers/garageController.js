@@ -243,6 +243,16 @@ router.delete('/:id', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERAD
     res.status(200).json({ message: 'Eliminado exitosamente.' });
 });
 
+// RESTORE
+router.patch('/:id/restaurar', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+
+    const data = await svc.restoreAsync(id, req.usuario);
+    if (!data) throwError('No encontrado: El garage no existe en tu papelera.', 404);
+    res.status(200).json(data);
+});
+
 // POST INGRESO VEHICULO SIN RESERVA
 router.post('/:id/ingreso-no-reserva', requireRole(1, 3, 4), async (req, res) => {
     const id = parseInt(req.params.id);
