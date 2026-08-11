@@ -5,6 +5,18 @@ const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN
 });
 
+export const isSandbox = () => process.env.MP_SANDBOX === 'true' || process.env.MP_SANDBOX === '1';
+
+const isLocalhost = (url) => {
+  if (!url) return true;
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0';
+  } catch {
+    return true;
+  }
+};
+
 export const createPreference = async (items, orderId, backUrls = {}) => {
   const preference = new Preference(client);
 
@@ -24,9 +36,12 @@ export const createPreference = async (items, orderId, backUrls = {}) => {
       currency_id: item.currency_id || 'ARS'
     })),
     external_reference: String(orderId),
-    back_urls: { ...defaultBackUrls, ...backUrls },
-    notification_url: `${process.env.BACKEND_URL}/api/payments/webhook`
+    back_urls: { ...defaultBackUrls, ...backUrls }
   };
+
+  if (!isLocalhost(process.env.BACKEND_URL)) {
+    body.notification_url = `${process.env.BACKEND_URL}/api/payments/webhook`;
+  }
 
   if (process.env.MP_AUTO_RETURN) {
     body.auto_return = process.env.MP_AUTO_RETURN;

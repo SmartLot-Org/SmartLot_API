@@ -40,7 +40,8 @@ mock.module('../src/services/mpService.js', {
       state.serviceCalls.push(['searchPayments', filters]);
       if (state.failNextSearch) throw new Error('mp down');
       return { results: [{ id: 'PAY-1' }] };
-    }
+    },
+    isSandbox: () => process.env.MP_SANDBOX === 'true' || process.env.MP_SANDBOX === '1'
   }
 });
 
@@ -90,13 +91,27 @@ test('POST /preference crea preferencia y guarda en pagos', async () => {
   assert.deepEqual(res.body, {
     preferenceId: 'pref-123',
     initPoint: 'https://init.example/pref-123',
-    sandboxInitPoint: 'https://sandbox.example/pref-123'
+    sandboxInitPoint: 'https://sandbox.example/pref-123',
+    sandbox: false
   });
   assert.deepEqual(state.serviceCalls[0], ['createPreference', [{ id: 1, title: 'Reserva', unit_price: 750, quantity: 2 }], 'ORD-42']);
   const insert = findQuery('INSERT INTO pagos');
   assert.ok(insert);
   assert.equal(insert.params[0], 'ORD-42');
   assert.equal(insert.params[2], 1500);
+});
+
+test('POST /preference con MP_SANDBOX=true devuelve sandbox_init_point como initPoint', async () => {
+  process.env.MP_SANDBOX = 'true';
+  const res = await request(app)
+    .post('/preference')
+    .send({ items: [{ title: 'Reserva', unit_price: 100, quantity: 1 }], orderId: 'ORD-43' });
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.sandbox, true);
+  assert.equal(res.body.initPoint, 'https://sandbox.example/pref-123');
+  assert.equal(res.body.sandboxInitPoint, 'https://sandbox.example/pref-123');
+  delete process.env.MP_SANDBOX;
 });
 
 test('GET /:paymentId consulta y persiste el pago', async () => {

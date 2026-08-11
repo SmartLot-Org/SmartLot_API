@@ -25,7 +25,7 @@ mock.module('mercadopago', {
   }
 });
 
-const { createPreference, getPayment, verifySignature, refundPayment, searchPayments } = await import('../src/services/mpService.js');
+const { createPreference, getPayment, verifySignature, refundPayment, searchPayments, isSandbox } = await import('../src/services/mpService.js');
 
 test.beforeEach(() => {
   calls.preference.length = 0;
@@ -40,6 +40,7 @@ function computeSignature(dataId, requestId, ts, secret) {
 
 test('createPreference normaliza items y arma el body completo', async () => {
   delete process.env.MP_AUTO_RETURN;
+  delete process.env.MP_SANDBOX;
   const result = await createPreference(
     [{ id: 5, title: 'Reserva garage', unit_price: 1500, quantity: 2 }],
     'ORD-42'
@@ -51,7 +52,26 @@ test('createPreference normaliza items y arma el body completo', async () => {
   assert.deepEqual(body.items, [{ id: 5, title: 'Reserva garage', description: '', quantity: 2, unit_price: 1500, currency_id: 'ARS' }]);
   assert.equal(Object.hasOwn(body, 'auto_return'), false);
   assert.equal(body.back_urls.success, `${process.env.FRONTEND_URL}/payment/success`);
-  assert.equal(body.notification_url, `${process.env.BACKEND_URL}/api/payments/webhook`);
+  assert.equal(Object.hasOwn(body, 'notification_url'), false, 'no debe mandar notification_url cuando BACKEND_URL es localhost');
+});
+
+test('createPreference incluye notification_url solo cuando BACKEND_URL es publica', async () => {
+  const originalBackend = process.env.BACKEND_URL;
+  process.env.BACKEND_URL = 'https://api.smartlot.ar';
+  await createPreference([{ title: 'x', unit_price: 100 }], 'ORD-9');
+  assert.equal(calls.preference[0].notification_url, 'https://api.smartlot.ar/api/payments/webhook');
+  process.env.BACKEND_URL = originalBackend;
+});
+
+test('isSandbox lee MP_SANDBOX como flag', () => {
+  assert.equal(isSandbox(), false);
+  process.env.MP_SANDBOX = 'true';
+  assert.equal(isSandbox(), true);
+  process.env.MP_SANDBOX = '1';
+  assert.equal(isSandbox(), true);
+  process.env.MP_SANDBOX = 'false';
+  assert.equal(isSandbox(), false);
+  delete process.env.MP_SANDBOX;
 });
 
 test('createPreference incluye auto_return solo si MP_AUTO_RETURN esta configurado', async () => {

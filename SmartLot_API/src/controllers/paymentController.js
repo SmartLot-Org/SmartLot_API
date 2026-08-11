@@ -4,7 +4,8 @@ import {
   getPayment,
   verifySignature,
   refundPayment,
-  searchPayments
+  searchPayments,
+  isSandbox
 } from '../services/mpService.js';
 import pool from '../database/db.js';
 import { isValidId } from '../helpers/validatorHelper.js';
@@ -142,10 +143,12 @@ router.post('/preference', async (req, res, next) => {
       ]
     );
 
+    const sandbox = isSandbox();
     res.status(201).json({
       preferenceId: preference.id,
-      initPoint: preference.init_point,
-      sandboxInitPoint: preference.sandbox_init_point
+      initPoint: sandbox ? preference.sandbox_init_point : preference.init_point,
+      sandboxInitPoint: preference.sandbox_init_point,
+      sandbox
     });
   } catch (err) {
     next(err);

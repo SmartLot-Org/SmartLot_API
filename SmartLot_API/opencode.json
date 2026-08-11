@@ -5,6 +5,14 @@
       "type": "remote",
       "url": "https://mcp.supabase.com/mcp?project_ref=amhjswdgrbyfvjmogzjw",
       "enabled": true
+    },
+    "render": {
+      "type": "remote",
+      "url": "https://mcp.render.com/mcp",
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:RENDER_API_KEY}"
+      }
     }
   }
 }
