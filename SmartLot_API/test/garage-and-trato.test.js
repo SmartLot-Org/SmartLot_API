@@ -40,6 +40,14 @@ test('dueño no obtiene un garage ajeno para modificarlo', async () => {
   const { svc } = garageService();
   assert.equal(await svc.getByIdAsync(2, { ...owner, id: 999 }), null);
 });
+test('dueño puede restaurar un garage eliminado y delega el usuario al repo', async () => {
+  const { svc } = garageService();
+  let calledWith = null;
+  svc.repo.restoreAsync = async (id, user) => { calledWith = { id, user }; return { id, Borrado: false }; };
+  const restored = await svc.restoreAsync(3, owner);
+  assert.deepEqual(calledWith, { id: 3, user: owner });
+  assert.equal(restored.Borrado, false);
+});
 
 function tratoService() {
   const svc = new TratoEmpresaGarageService();
@@ -88,6 +96,13 @@ test('admin no puede crear, editar ni eliminar garage físico y cercanos está a
   assert.match(controller, /post\('', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
   assert.match(controller, /put\('\/:id', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
   assert.ok(controller.indexOf("get('/cercanos'") < controller.indexOf("get('/:id'"));
+});
+test('dueño de garage puede restaurar con la misma restricción de rol que eliminar', () => {
+  assert.match(controller, /patch\('\/:id\/restaurar', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE, ROLE_NAMES\.SUPERADMIN\)/);
+  assert.match(controller, /restoreAsync\(id, req\.usuario\)/);
+  assert.match(repository, /restoreAsync\s*=\s*async\s*\(id,\s*requestingUser/);
+  assert.match(repository, /COALESCE\(g\."Borrado", false\) = true/);
+  assert.match(repository, /RETURNING g\.\*/);
 });
 test('acceso normal usa usuario_garage o trato derivando empresa mediante sede', () => {
   assert.match(repository, /usuario_garage/); assert.match(repository, /trato_empresa_garage/);
