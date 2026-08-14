@@ -2,6 +2,7 @@ import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');
 
 import { MailtrapClient } from 'mailtrap';
+import { pool } from '../database/dbClient.js';
 
 const mailtrapClient = new MailtrapClient({
     token: (process.env.EMAIL_PASS || '').trim()
@@ -40,7 +41,7 @@ const wordmark = (tamanio = 28) => `
     </span>`;
 
 /**
- * Header de marca: gradiente navy → azul con wordmark y tagline.
+ * Header de marca por defecto: gradiente navy → azul con wordmark y tagline.
  */
 const header = ({ tagline = 'El estacionamiento del futuro' } = {}) => `
     <div style="background:linear-gradient(135deg, ${BRAND.navy} 0%, ${BRAND.navyAlt} 100%);padding:40px 32px 36px;text-align:center;border-radius:16px 16px 0 0;">
@@ -78,7 +79,7 @@ const cajaInfo = ({ titulo = '', lineas = [], variante = 'info' } = {}) => {
 };
 
 /**
- * Footer de marca: fondo navy con wordmark y legal.
+ * Footer de marca por defecto: fondo navy con wordmark y legal.
  */
 const footer = () => `
     <div style="background:${BRAND.navy};padding:26px 32px;text-align:center;border-radius:0 0 16px 16px;">
@@ -90,9 +91,10 @@ const footer = () => `
     </div>`;
 
 /**
- * Layout base: envuelve el cuerpo en el documento HTML completo con header y footer de marca.
+ * Layout base: envuelve las secciones en el documento HTML completo.
+ * Si no se pasan header/footer usa los bloques de marca por defecto.
  */
-const layout = (cuerpo) => `
+const layout = (cuerpo, headerHtml = header(), footerHtml = footer()) => `
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -109,15 +111,15 @@ const layout = (cuerpo) => `
 <body style="margin:0;padding:0;background-color:${BRAND.bg};">
     <div class="contenedor" style="max-width:600px;margin:0 auto;padding:24px 16px;background-color:${BRAND.bg};">
         <div style="background-color:${BRAND.surface};border-radius:16px;overflow:hidden;border:1px solid ${BRAND.border};box-shadow:0 8px 30px rgba(12,30,63,0.10);">
-            ${header()}
+            ${headerHtml}
             ${cuerpo}
-            ${footer()}
+            ${footerHtml}
         </div>
     </div>
 </body>
 </html>`;
 
-// ─── Plantillas ───────────────────────────────────────────────────
+// ─── Plantillas de respaldo (se usan si la base de datos falla) ───
 /**
  * Plantilla de bienvenida para nuevos usuarios.
  */
@@ -158,6 +160,113 @@ export const plantillaCambioContraseña = (nombre) => {
     </div>`;
 
     return layout(cuerpo);
+};
+
+// ─── Plantillas desde base de datos ───────────────────────────────
+const TPL_CACHE_TTL_MS = 60 * 1000;
+const tplCache = new Map();
+
+/**
+ * Escapa un valor para insertarlo de forma segura dentro del HTML del correo.
+ */
+export const escaparHtml = (valor) => String(valor ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+/**
+ * Invalida la caché de una plantilla (o de todas si no se pasa codigo).
+ */
+export const invalidarCachePlantilla = (codigo) => {
+    if (codigo) tplCache.delete(codigo);
+    else tplCache.clear();
+};
+
+/**
+ * Carga una plantilla desde la tabla email_templates con caché en memoria.
+ * Devuelve null si no existe o si la base de datos falla.
+ */
+export const cargarPlantilla = async (codigo) => {
+    const enCache = tplCache.get(codigo);
+    if (enCache && Date.now() - enCache.ts < TPL_CACHE_TTL_MS) {
+        return enCache.plantilla;
+    }
+
+    try {
+        const { rows } = await pool.query(
+            `SELECT * FROM email_templates WHERE codigo = $1 AND activa = true`,
+            [codigo]
+        );
+        const plantilla = rows[0] ?? null;
+        if (plantilla) tplCache.set(codigo, { ts: Date.now(), plantilla });
+        return plantilla;
+    } catch (error) {
+        console.error('Error cargando plantilla de email:', error);
+        return null;
+    }
+};
+
+/**
+ * Variables construidas automáticamente por el sistema (no editables desde el backoffice).
+ */
+const construirVariablesBase = (variables = {}) => ({
+    link_login: `${FRONTEND_URL}/login`,
+    anio: String(new Date().getFullYear()),
+    ...variables
+});
+
+/**
+ * Renderiza una plantilla de la DB: reemplaza los placeholders {{variable}}
+ * por los valores recibidos (escapados en HTML). Las variables desconocidas
+ * quedan intactas para detectar faltantes en el preview.
+ */
+export const renderPlantilla = (plantilla, variables = {}) => {
+    const mapa = construirVariablesBase(variables);
+
+    const reemplazar = (texto) => String(texto ?? '').replace(
+        /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g,
+        (match, nombreVar) => Object.prototype.hasOwnProperty.call(mapa, nombreVar)
+            ? escaparHtml(mapa[nombreVar])
+            : match
+    );
+
+    return {
+        asunto: reemplazar(plantilla.asunto),
+        html: reemplazar(layout(plantilla.cuerpo_html, plantilla.header_html, plantilla.footer_html))
+    };
+};
+
+const FALLBACKS = {
+    bienvenida: (v = {}) => ({
+        asunto: 'Bienvenido a SmartLot',
+        html: plantillaBienvenida(v.nombre ?? '', v.email ?? '')
+    }),
+    cambio_contraseña: (v = {}) => ({
+        asunto: 'Contraseña Actualizada - SmartLot',
+        html: plantillaCambioContraseña(v.nombre ?? '')
+    })
+};
+
+/**
+ * Envía un correo usando una plantilla guardada en la base de datos.
+ * Si la plantilla no existe o la DB falla, usa la plantilla de respaldo en código.
+ */
+export const enviarCorreoDesdePlantilla = async (destinatario, codigo, variables = {}) => {
+    const plantilla = await cargarPlantilla(codigo);
+
+    let asunto;
+    let html;
+    if (plantilla) {
+        ({ asunto, html } = renderPlantilla(plantilla, variables));
+    } else {
+        const fallback = FALLBACKS[codigo];
+        if (!fallback) throw new Error(`No existe la plantilla de correo "${codigo}".`);
+        ({ asunto, html } = fallback(variables));
+    }
+
+    return await enviarCorreo(destinatario, asunto, html);
 };
 
 // ─── Envío ────────────────────────────────────────────────────────

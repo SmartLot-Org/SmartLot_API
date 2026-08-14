@@ -9,6 +9,8 @@ import pool from '../database/db.js';
 
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
 
+const ROL_LABEL = { admin: 'admin', superadmin: 'superadmin' };
+
 export default class TratoEmpresaGarageService {
     constructor() {
         this.repo = new TratoEmpresaGarageRepository();
@@ -95,14 +97,15 @@ export default class TratoEmpresaGarageService {
         const updated = await this.repo.updateQuantityAsync(id, cantidad);
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {
+            const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';
             const actorNombre = await this._obtenerActorNombre(usuario.id);
             const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
-            const mensaje = `${actorNombre} ha modificado el trato con el garage ${current.id_garage} (ahora ${cantidad} cocheras).`;
+            const mensaje = `El ${rol} ${actorNombre} modificó su trato con el garage ${current.garage_nombre} (ahora ${cantidad} cocheras).`;
             for (const usuarioGarage of usuariosGarage) {
                 await this.notificacionService.crearAsync(
                     usuarioGarage.id,
                     mensaje,
-                    'trato_empresa_garage',
+                    'trato_modificado',
                     actorNombre,
                     current.id_garage
                 );
@@ -117,14 +120,15 @@ export default class TratoEmpresaGarageService {
         if (!this._adminCanManage(usuario, current)) fail('No puede eliminar este trato.', 403);
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {
+            const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';
             const actorNombre = await this._obtenerActorNombre(usuario.id);
             const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
-            const mensaje = `${actorNombre} ha cancelado el trato con el garage ${current.id_garage}.`;
+            const mensaje = `El ${rol} ${actorNombre} canceló su trato con el garage ${current.garage_nombre}.`;
             for (const usuarioGarage of usuariosGarage) {
                 await this.notificacionService.crearAsync(
                     usuarioGarage.id,
                     mensaje,
-                    'trato_empresa_garage',
+                    'trato_cancelado',
                     actorNombre,
                     current.id_garage
                 );

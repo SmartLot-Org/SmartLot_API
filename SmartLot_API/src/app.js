@@ -20,8 +20,10 @@ import TratoEmpresaGarageController from "./controllers/tratoEmpresaGarageContro
 import SolicitudEmpresaGarageController from "./controllers/solicitudEmpresaGarageController.js"
 import NotificacionController from "./controllers/NotificacionController.js"
 import PaymentController from "./controllers/paymentController.js"
+import EmailTemplateController from "./controllers/emailTemplateController.js"
 import authMiddleware      from "./middlewares/authMiddleware.js"
 import errorHandler       from "./middlewares/errorHandler.js"
+import { requireRole }    from "./middlewares/rolesMiddleware.js"
 
 process.on('unhandledRejection', (reason) => {
     console.error('UNHANDLED REJECTION:', reason);
@@ -56,6 +58,7 @@ app.use("/api/conflicto", authMiddleware, ConflictoController);
 app.use("/api/trato-empresa-garage", authMiddleware, TratoEmpresaGarageController);
 app.use("/api/solicitud-empresa-garage", authMiddleware, SolicitudEmpresaGarageController);
 app.use("/api/notificacion", authMiddleware, NotificacionController);
+app.use("/api/email-template", authMiddleware, requireRole(4), EmailTemplateController);
 
 // Payment routes - webhook is public, others require auth
 app.use("/api/payments", (req, res, next) => {

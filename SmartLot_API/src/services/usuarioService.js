@@ -6,7 +6,7 @@ import EmpresaService from './empresaService.js';
 import RolService from './rolService.js';
 import GarageService from './garageService.js';
 import UsuarioGarageService from './usuarioGarageService.js';
-import { enviarCorreo, plantillaBienvenida, plantillaCambioContraseña } from './emailService.js';
+import { enviarCorreoDesdePlantilla } from './emailService.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 
@@ -271,7 +271,7 @@ export default class UsuarioService {
 
                 const nombreCompleto = `${nuevoUsuario.nombre ?? ''} ${nuevoUsuario.apellido ?? ''}`.trim() || 'Usuario';
                 try {
-                    await enviarCorreo(nuevoUsuario.email, 'Bienvenido a SmartLot', plantillaBienvenida(nombreCompleto, nuevoUsuario.email));
+await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nombreCompleto, email: nuevoUsuario.email });
                 } catch (err) {
                     console.error('Error al enviar correo de bienvenida:', err);
                 }
@@ -288,7 +288,7 @@ export default class UsuarioService {
 
             const nombreCompleto = `${nuevoUsuario.nombre ?? ''} ${nuevoUsuario.apellido ?? ''}`.trim() || 'Usuario';
             try {
-                await enviarCorreo(nuevoUsuario.email, 'Bienvenido a SmartLot', plantillaBienvenida(nombreCompleto, nuevoUsuario.email));
+                await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nombreCompleto, email: nuevoUsuario.email });
             } catch (err) {
                 console.error('Error al enviar correo de bienvenida:', err);
             }
@@ -370,7 +370,7 @@ export default class UsuarioService {
 
         const nombreCompleto = `${current.nombre ?? ''} ${current.apellido ?? ''}`.trim() || 'Usuario';
         try {
-            await enviarCorreo(current.email, 'Contraseña Actualizada - SmartLot', plantillaCambioContraseña(nombreCompleto));
+            await enviarCorreoDesdePlantilla(current.email, 'cambio_contraseña', { nombre: nombreCompleto });
         } catch (err) {
             console.error('Error al enviar correo de cambio de contraseña:', err);
         }
