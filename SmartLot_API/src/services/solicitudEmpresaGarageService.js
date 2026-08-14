@@ -1,10 +1,62 @@
+// solicitudEmpresaGarageService.js
 import SolicitudEmpresaGarageRepository from '../repositories/solicitudEmpresaGarageRepository.js';
+import NotificacionService from '../services/NotificacionService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
+import pool from '../database/db.js';
 
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
 
 export default class SolicitudEmpresaGarageService {
-    constructor() { this.repo = new SolicitudEmpresaGarageRepository(); }
+    constructor() {
+        this.repo = new SolicitudEmpresaGarageRepository();
+        this.notificacionService = new NotificacionService();
+    }
+
+    _obtenerActorNombre = async (actorId) => {
+        try {
+            const result = await pool.query(
+                `SELECT nombre, apellido FROM usuarios WHERE id = $1 AND COALESCE("Borrado", false) = false`,
+                [actorId]
+            );
+            if (result.rows[0]) {
+                return `${result.rows[0].nombre} ${result.rows[0].apellido}`.trim() || 'Unknown';
+            }
+            return 'Unknown';
+        } catch (err) {
+            console.error('Error al obtener nombre de actor:', err);
+            return 'Unknown';
+        }
+    };
+
+    _obtenerUsuariosGarage = async (idGarage) => {
+        try {
+            const result = await pool.query(
+                `SELECT u.id, u.nombre, u.apellido FROM usuarios u
+                 INNER JOIN usuario_garage ug ON ug.id_usuario = u.id
+                 WHERE ug.id_garage = $1 AND COALESCE(u."Borrado", false) = false`,
+                [idGarage]
+            );
+            return result.rows;
+        } catch (err) {
+            console.error('Error al obtener usuarios del garage:', err);
+            return [];
+        }
+    };
+
+    _obtenerAdminsEmpresa = async (idSede, idEmpresa) => {
+        try {
+            const result = await pool.query(
+                `SELECT u.id, u.nombre, u.apellido FROM usuarios u
+                 INNER JOIN roles r ON r.id = u.id_rol
+                 WHERE u.id_sede = $1 AND u.id_empresa = $2 AND r.tipo_rol = 'admin' AND COALESCE(u."Borrado", false) = false AND COALESCE(r."Borrado", false) = false`,
+                [idSede, idEmpresa]
+            );
+            return result.rows;
+        } catch (err) {
+            console.error('Error al obtener admins de empresa:', err);
+            return [];
+        }
+    };
 
     createAsync = async (input, usuario) => {
         if (!hasRole(usuario, 1, ROLE_NAMES.ADMIN)) fail('Solo un administrador puede crear solicitudes.', 403);
@@ -24,13 +76,33 @@ export default class SolicitudEmpresaGarageService {
             if (descripcion.length > 1000) fail('descripcion no puede superar 1000 caracteres.', 400);
             if (!descripcion) descripcion = null;
         }
-        return this.repo.createPendingAsync({
+
+        const result = await this.repo.createPendingAsync({
             id_sede: idSede,
             id_empresa_autorizada: idEmpresa,
             id_garage: idGarage,
             cantidad_cocheras: cantidad,
             descripcion,
         });
+
+        // Notificar a los dueños del garage (best-effort, try/catch)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const usuariosGarage = await this._obtenerUsuariosGarage(idGarage);
+            for (const usuarioGarage of usuariosGarage) {
+                await this.notificacionService.crearAsync(
+                    usuarioGarage.id,
+                    `${actorNombre} quiere hacer un trato con el garage ${idGarage} por ${cantidad} cocheras.`,
+                    'solicitud_empresa_garage',
+                    actorNombre,
+                    idGarage
+                );
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de solicitud:', err);
+        }
+
+        return result;
     };
 
     getSentAsync = async (usuario) => {
@@ -57,18 +129,79 @@ export default class SolicitudEmpresaGarageService {
 
     acceptAsync = async (id, usuario) => {
         if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) fail('Solo el dueño del garage puede aceptar solicitudes.', 403);
-        return this.repo.acceptAsync(id, usuario.id);
+        const solicitud = await this.repo.acceptAsync(id, usuario.id);
+        // Notificar a los admins de la empresa (best-effort, try/catch)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const sede = await pool.query('SELECT id, id_empresa FROM sedes WHERE id = $1', [solicitud.id_sede]);
+            const idEmpresa = sede.rows[0] ? sede.rows[0].id_empresa : null;
+            const idSede = sede.rows[0] ? sede.rows[0].id : null;
+
+            if (idEmpresa) {
+                const admins = await this._obtenerAdminsEmpresa(idSede, idEmpresa);
+                for (const admin of admins) {
+                    await this.notificacionService.crearAsync(
+                        admin.id,
+                        `${actorNombre} ha ${solicitud.estado === 'aceptada' ? 'aceptado' : 'rechazado'} la solicitud de trato.`,
+                        'solicitud_empresa_garage',
+                        actorNombre
+                    );
+                }
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de acept/rechazo:', err);
+        }
+        return solicitud;
     };
 
     rejectAsync = async (id, usuario) => {
         if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) fail('Solo el dueño del garage puede rechazar solicitudes.', 403);
-        return this.repo.rejectAsync(id, usuario.id);
+        const solicitud = await this.repo.rejectAsync(id, usuario.id);
+        // Notificar a los admins de la empresa (best-effort, try/catch)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const sede = await pool.query('SELECT id, id_empresa FROM sedes WHERE id = $1', [solicitud.id_sede]);
+            const idEmpresa = sede.rows[0] ? sede.rows[0].id_empresa : null;
+            const idSede = sede.rows[0] ? sede.rows[0].id : null;
+
+            if (idEmpresa) {
+                const admins = await this._obtenerAdminsEmpresa(idSede, idEmpresa);
+                for (const admin of admins) {
+                    await this.notificacionService.crearAsync(
+                        admin.id,
+                        `${actorNombre} ha ${solicitud.estado === 'rechazada' ? 'rechazado' : 'aceptado'} la solicitud de trato.`,
+                        'solicitud_empresa_garage',
+                        actorNombre
+                    );
+                }
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de acept/rechazo:', err);
+        }
+        return solicitud;
     };
 
     cancelAsync = async (id, usuario) => {
         if (!hasRole(usuario, 1, ROLE_NAMES.ADMIN)) fail('Solo la empresa solicitante puede cancelar solicitudes.', 403);
         const idEmpresa = Number(usuario.id_empresa);
         if (!Number.isInteger(idEmpresa) || idEmpresa <= 0) fail('El administrador no tiene una empresa válida.', 403);
-        return this.repo.cancelAsync(id, idEmpresa, usuario.id_sede ? Number(usuario.id_sede) : null);
+        const result = await this.repo.cancelAsync(id, idEmpresa, usuario.id_sede ? Number(usuario.id_sede) : null);
+        // Notificar a los dueños del garage (best-effort, try/catch)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const usuariosGarage = await this._obtenerUsuariosGarage(result.id_garage);
+            for (const usuarioGarage of usuariosGarage) {
+                await this.notificacionService.crearAsync(
+                    usuarioGarage.id,
+                    `${actorNombre} ha cancelado la solicitud de trato para el garage ${result.id_garage}.`,
+                    'solicitud_empresa_garage',
+                    actorNombre,
+                    result.id_garage
+                );
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de cancelación:', err);
+        }
+        return result;
     };
 }

@@ -1,8 +1,11 @@
+// tratoEmpresaGarageService.js
 import TratoEmpresaGarageRepository from '../repositories/tratoEmpresaGarageRepository.js';
 import GarageService from './garageService.js';
 import SedeService from './sedeService.js';
 import UsuarioGarageService from './usuarioGarageService.js';
+import NotificacionService from '../services/NotificacionService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
+import pool from '../database/db.js';
 
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
 
@@ -12,7 +15,39 @@ export default class TratoEmpresaGarageService {
         this.garageService = new GarageService();
         this.sedeService = new SedeService();
         this.usuarioGarageService = new UsuarioGarageService();
+        this.notificacionService = new NotificacionService();
     }
+
+    _obtenerActorNombre = async (actorId) => {
+        try {
+            const result = await pool.query(
+                `SELECT nombre, apellido FROM usuarios WHERE id = $1 AND COALESCE("Borrado", false) = false`,
+                [actorId]
+            );
+            if (result.rows[0]) {
+                return `${result.rows[0].nombre} ${result.rows[0].apellido}`.trim() || 'Unknown';
+            }
+            return 'Unknown';
+        } catch (err) {
+            console.error('Error al obtener nombre de actor:', err);
+            return 'Unknown';
+        }
+    };
+
+    _obtenerUsuariosGarage = async (idGarage) => {
+        try {
+            const result = await pool.query(
+                `SELECT u.id, u.nombre, u.apellido FROM usuarios u
+                 INNER JOIN usuario_garage ug ON ug.id_usuario = u.id
+                 WHERE ug.id_garage = $1 AND COALESCE(u."Borrado", false) = false`,
+                [idGarage]
+            );
+            return result.rows;
+        } catch (err) {
+            console.error('Error al obtener usuarios del garage:', err);
+            return [];
+        }
+    };
 
     getAllAsync = async (usuario) => {
         if (hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) return this.repo.getAllAsync();
@@ -57,11 +92,46 @@ export default class TratoEmpresaGarageService {
         if (!this._adminCanManage(usuario, current)) fail('No puede modificar este trato.', 403);
         const cantidad = Number(changes.cantidad_cocheras);
         if (!Number.isInteger(cantidad) || cantidad <= 0) fail('cantidad_cocheras debe ser un entero mayor que 0.', 400);
-        return this.repo.updateQuantityAsync(id, cantidad);
+        const updated = await this.repo.updateQuantityAsync(id, cantidad);
+        // Notificar a los dueños del garage (best-effort, try/catch)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
+            const mensaje = `${actorNombre} ha modificado el trato con el garage ${current.id_garage} (ahora ${cantidad} cocheras).`;
+            for (const usuarioGarage of usuariosGarage) {
+                await this.notificacionService.crearAsync(
+                    usuarioGarage.id,
+                    mensaje,
+                    'trato_empresa_garage',
+                    actorNombre,
+                    current.id_garage
+                );
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de actualización de trato:', err);
+        }
+        return updated;
     };
     deleteAsync = async (id, usuario) => {
         const current = await this.getByIdAsync(id, usuario);
         if (!this._adminCanManage(usuario, current)) fail('No puede eliminar este trato.', 403);
+        // Notificar a los dueños del garage (best-effort, try/catch)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
+            const mensaje = `${actorNombre} ha cancelado el trato con el garage ${current.id_garage}.`;
+            for (const usuarioGarage of usuariosGarage) {
+                await this.notificacionService.crearAsync(
+                    usuarioGarage.id,
+                    mensaje,
+                    'trato_empresa_garage',
+                    actorNombre,
+                    current.id_garage
+                );
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de eliminación de trato:', err);
+        }
         return this.repo.deleteAsync(id);
     };
     _adminCanManage = (usuario, row) => hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN) ||

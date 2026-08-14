@@ -20,6 +20,7 @@ function garageService({ relationFails = false } = {}) {
     getByIdAsync: async (id, user) => user?.id === 999 ? null : ({ id, capacidad: 10, dias: ['Lunes'] }),
   };
   svc.usuarioGarageService = { createWithClientAsync: async () => { if (relationFails) throw new Error('relation failed'); } };
+  svc.notificacionService = { crearAsync: async () => {} };
   return { svc, commands };
 }
 
@@ -54,6 +55,7 @@ function tratoService() {
   const rows = [];
   svc.sedeService = { getByIdAsync: async (id) => id === 99 ? ({ id, id_empresa: 2 }) : ({ id, id_empresa: id === 8 ? 2 : 1 }) };
   svc.usuarioGarageService = { userHasGarageAsync: async () => false };
+  svc.notificacionService = { crearAsync: async () => {} };
   svc.repo = {
     getBySedeGarageAsync: async (s, g) => rows.find((r) => r.id_sede === s && r.id_garage === g) || null,
     createAgreementAsync: async (e) => { const row = { id: rows.length + 1, id_empresa: e.id_sede === 8 ? 2 : 1, precio_auto: 100, precio_pickup: 200, ...e }; rows.push(row); return row; },

@@ -26,6 +26,7 @@ function serviceFixture() {
         rejectAsync: async (id) => ({ id, estado: 'rechazada' }),
         cancelAsync: async (id) => ({ id, estado: 'cancelada' }),
     };
+    svc.notificacionService = { crearAsync: async () => {} };
     return svc;
 }
 

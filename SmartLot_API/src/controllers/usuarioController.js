@@ -282,7 +282,7 @@ router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), asy
 });
 
 // UPDATE CONTRASEÑA (PATCH) - admin, smartlot o el propio usuario
-router.patch(['/:id/contraseña', '/:id/contrasenia', '/:id/contrase%C3%B1a'], authMiddleware, requireRole(1, 4), async (req, res) => {
+router.patch(['/:id/contraseña', '/:id/contrasenia', '/:id/contrase%C3%B1a'], authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
     const id = req.params.id;
 
     if (!isValidId(id)) throwError('El ID proporcionado no es válido.', 400);
