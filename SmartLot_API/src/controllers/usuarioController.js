@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import UsuarioService from './../services/usuarioService.js';
 import { isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone } from '../helpers/validatorHelper.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
-import { requireRole } from '../middlewares/rolesMiddleware.js';
+import { requireRole, requireRoleOrSelf } from '../middlewares/rolesMiddleware.js';
 import authRateLimiter from '../middlewares/rateLimiterMiddleware.js';
 
 const router = Router();
