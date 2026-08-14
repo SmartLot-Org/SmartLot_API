@@ -31,6 +31,9 @@ export default class EmailTemplateRepository {
 
     updateAsync = async (codigo, datos) => {
         try {
+            const variables = typeof datos.variables === 'object' && datos.variables !== null
+                ? JSON.stringify(datos.variables)
+                : (datos.variables ?? '[]');
             const result = await pool.query(
                 `UPDATE email_templates
                  SET nombre = $2,
@@ -52,7 +55,7 @@ export default class EmailTemplateRepository {
                     datos.header_html ?? '',
                     datos.cuerpo_html ?? null,
                     datos.footer_html ?? '',
-                    datos.variables ?? '[]',
+                    variables,
                     datos.activa ?? true
                 ]
             );
