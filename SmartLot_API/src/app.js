@@ -21,6 +21,7 @@ import SolicitudEmpresaGarageController from "./controllers/solicitudEmpresaGara
 import NotificacionController from "./controllers/NotificacionController.js"
 import PaymentController from "./controllers/paymentController.js"
 import EmailTemplateController from "./controllers/emailTemplateController.js"
+import CuentaCorrienteController from "./controllers/cuentaCorrienteController.js"
 import authMiddleware      from "./middlewares/authMiddleware.js"
 import errorHandler       from "./middlewares/errorHandler.js"
 import { requireRole }    from "./middlewares/rolesMiddleware.js"
@@ -59,6 +60,7 @@ app.use("/api/trato-empresa-garage", authMiddleware, TratoEmpresaGarageControlle
 app.use("/api/solicitud-empresa-garage", authMiddleware, SolicitudEmpresaGarageController);
 app.use("/api/notificacion", authMiddleware, NotificacionController);
 app.use("/api/email-template", authMiddleware, requireRole(4), EmailTemplateController);
+app.use("/api/cuentas-corrientes", authMiddleware, CuentaCorrienteController);
 
 // Payment routes - webhook is public, others require auth
 app.use("/api/payments", (req, res, next) => {

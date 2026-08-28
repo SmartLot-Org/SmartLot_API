@@ -5,6 +5,7 @@ import UsuarioService from './usuarioService.js';
 import GarageService from './garageService.js';
 import VehiculoService from './vehiculoService.js';
 import { isValidDiaSemana } from '../helpers/validatorHelper.js';
+import CuentaCorrienteRepository from '../repositories/cuentaCorrienteRepository.js';
 
 export default class ReservaService {
     constructor() {
@@ -13,6 +14,7 @@ export default class ReservaService {
         this.usuarioService = new UsuarioService();
         this.garageService = new GarageService();
         this.vehiculoService = new VehiculoService();
+        this.cuentaCorrienteRepo = new CuentaCorrienteRepository();
     }
 
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
@@ -356,6 +358,13 @@ export default class ReservaService {
             if (!updatedReserva) {
                 const error = new Error('Error al registrar la salida de la reserva.');
                 error.statusCode = 500;
+                throw error;
+            }
+
+            const consumo = await this.cuentaCorrienteRepo.crearConsumoReservaAsync(id, client);
+            if (!consumo) {
+                const error = new Error('No se pudo generar el consumo: verifique la sede, el trato y la tarifa del tipo de vehiculo.');
+                error.statusCode = 409;
                 throw error;
             }
 

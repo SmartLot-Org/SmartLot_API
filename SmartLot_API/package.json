@@ -21,6 +21,7 @@
     "check:structure": "node ./scripts/check-structure.cjs",
     "check:routes": "node ./scripts/check-routes.cjs",
     "check:db": "node ./scripts/check-db.cjs",
+    "check:consumos": "node ./scripts/check-consumos.cjs",
     "check:port": "node ./scripts/check-port.cjs"
   },
   "dependencies": {
