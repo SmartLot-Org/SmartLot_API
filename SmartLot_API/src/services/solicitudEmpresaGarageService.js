@@ -43,6 +43,19 @@ export default class SolicitudEmpresaGarageService {
         }
     };
 
+    _obtenerNombreGarage = async (idGarage) => {
+        try {
+            const result = await pool.query(
+                'SELECT nombre FROM garages WHERE id = $1 AND COALESCE("Borrado", false) = false',
+                [idGarage]
+            );
+            return result.rows[0]?.nombre ?? `garage ${idGarage}`;
+        } catch (err) {
+            console.error('Error al obtener nombre del garage:', err);
+            return `garage ${idGarage}`;
+        }
+    };
+
     _obtenerAdminsEmpresa = async (idSede, idEmpresa) => {
         try {
             const result = await pool.query(
@@ -88,11 +101,12 @@ export default class SolicitudEmpresaGarageService {
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(idGarage);
             const usuariosGarage = await this._obtenerUsuariosGarage(idGarage);
             for (const usuarioGarage of usuariosGarage) {
                 await this.notificacionService.crearAsync(
                     usuarioGarage.id,
-                    `${actorNombre} quiere hacer un trato con el garage ${idGarage} por ${cantidad} cocheras.`,
+                    `${actorNombre} quiere hacer un trato con ${garageNombre} por ${cantidad} cocheras.`,
                     'solicitud_empresa_garage',
                     actorNombre,
                     idGarage
@@ -189,11 +203,12 @@ export default class SolicitudEmpresaGarageService {
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(result.id_garage);
             const usuariosGarage = await this._obtenerUsuariosGarage(result.id_garage);
             for (const usuarioGarage of usuariosGarage) {
                 await this.notificacionService.crearAsync(
                     usuarioGarage.id,
-                    `${actorNombre} ha cancelado la solicitud de trato para el garage ${result.id_garage}.`,
+                    `${actorNombre} ha cancelado la solicitud de trato para ${garageNombre}.`,
                     'solicitud_empresa_garage',
                     actorNombre,
                     result.id_garage
