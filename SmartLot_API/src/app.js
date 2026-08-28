@@ -37,8 +37,34 @@ process.on('uncaughtException', (error) => {
 const app  = express();
 const port = process.env.PORT || 3000;
 
-app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000', credentials: true }));
+// Necesario cuando TLS termina en proxy (Render/Nginx) para que
+// req.secure y cookies `secure:true` funcionen correctamente
+app.set('trust proxy', 1);
+
+// HSTS + headers seguros (solo HSTS en prod para no bloquear localhost)
+const isProd = process.env.NODE_ENV === 'production';
+app.use(helmet({
+    hsts: isProd ? { maxAge: 31536000, includeSubDomains: true, preload: true } : false,
+    // Render ya fuerza HTTPS; en local no queremos redirecciones
+}));
+
+// Redirect http -> https en prod (cuando el proxy indica x-forwarded-proto)
+app.use((req, res, next) => {
+    if (isProd && req.headers['x-forwarded-proto'] && req.headers['x-forwarded-proto'] !== 'https') {
+        return res.redirect(301, `https://${req.headers.host}${req.url}`);
+    }
+    next();
+});
+
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',').map(o => o.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked: ${origin} not allowed`));
+  },
+  credentials: true,
+}));
 app.use(cookieParser());
 app.use(express.json({
     limit: '10kb',

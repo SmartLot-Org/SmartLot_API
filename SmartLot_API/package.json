@@ -12,7 +12,7 @@
     "db-test": "node ./src/database/db.js",
     "apptest": "node ./src/appTest.js",
     "app": "node ./src/app.js",
-    "testEmail": "set NODE_TLS_REJECT_UNAUTHORIZED=0&&node ./scripts/check_nodemailer.cjs",
+    "testEmail": "node ./scripts/check_nodemailer.cjs",
     "pre-deploy": "node ./scripts/pre-deploy.cjs",
     "check:env": "node ./scripts/check-env.cjs",
     "check:syntax": "node ./scripts/check-syntax.cjs",
