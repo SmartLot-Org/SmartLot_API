@@ -186,10 +186,31 @@ router.get('/webhook-events', async (req, res, next) => {
 
 router.get('/:paymentId', async (req, res, next) => {
   try {
-    const { paymentId } = req.params;
+    let { paymentId } = req.params;
+    paymentId = String(paymentId || '').trim();
 
     if (!paymentId) {
       throwError('paymentId is required', 400);
+    }
+
+    // Permitir UUID (preference_id) y numérico (payment_id). Mensaje claro si parece merchant_order/otro.
+    const isNumeric = /^\d+$/.test(paymentId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(paymentId);
+    const isUuidWithPrefix = /^\d+-[0-9a-f-]{10,}$/i.test(paymentId);
+    const looksComposite = paymentId.includes(';') || paymentId.includes('T') && paymentId.includes('UTC');
+    if (looksComposite && !isNumeric && !isUuid) {
+      return res.status(400).json({
+        error: true,
+        code: 'invalid_payment_id',
+        message: `El valor "${paymentId}" no es un payment_id válido (numérico) ni preference_id (UUID). Parece un merchant_order_id. Usa GET /api/payments?external_reference=TU_ORDER_ID o verifica el payment_id numérico del comprobante de MP.`,
+        statusCode: 400,
+        paymentId
+      });
+    }
+    // Si es UUID de preferencia, adelantar hint: el endpoint espera payment_id numérico
+    if ((isUuid || isUuidWithPrefix) && !isNumeric) {
+      // No bloqueamos (usuario pidió permitir UUID), pero avisamos en log
+      console.warn(`[MP] GET /:paymentId recibido UUID (posible preference_id) ${paymentId} - se intenta como payment_id; si es preferencia usa external_reference`);
     }
 
     const payment = await getPayment(paymentId);
@@ -211,6 +232,16 @@ router.get('/:paymentId', async (req, res, next) => {
       saved: savedPayment
     });
   } catch (err) {
+    // payment_not_found ya viene con statusCode 404 desde mpService
+    if (err.statusCode === 404 || err.code === 'payment_not_found') {
+      return res.status(404).json({
+        error: true,
+        code: err.code || 'payment_not_found',
+        message: err.message || `Pago ${req.params.paymentId} no encontrado en Mercado Pago. Si acabas de pagar, espera 5-10s y reintenta o usa ?external_reference=`,
+        statusCode: 404,
+        paymentId: err.paymentId || req.params.paymentId
+      });
+    }
     next(err);
   }
 });
@@ -299,8 +330,25 @@ router.get('/', async (req, res, next) => {
 
     const result = await searchPayments(filters);
 
+    // Sincronizar automáticamente pagos encontrados (sin webhook) → actualiza mp_payment_status en DB
+    const items = result?.results || result?.data || [];
+    if (external_reference && Array.isArray(items) && items.length > 0) {
+      for (const p of items) {
+        try {
+          if (p?.id && p?.status) {
+            await savePaymentRecord(p, req.usuario?.id_empresa);
+          }
+        } catch (syncErr) {
+          console.warn(`[MP] sync pagos failed for ${p?.id}:`, syncErr.message);
+        }
+      }
+    }
+
     res.json(result);
   } catch (err) {
+    if (err.statusCode === 404 || err.code === 'payment_not_found') {
+      return res.status(404).json({ error: true, code: err.code || 'payment_not_found', message: err.message, statusCode: 404 });
+    }
     next(err);
   }
 });

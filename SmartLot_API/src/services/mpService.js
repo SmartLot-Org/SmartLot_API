@@ -17,13 +17,19 @@ const isLocalhost = (url) => {
   }
 };
 
+const cleanUrl = (url) => {
+  if (!url) return '';
+  return String(url).trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+};
+
 export const createPreference = async (items, orderId, backUrls = {}) => {
   const preference = new Preference(client);
 
+  const frontendBase = cleanUrl(process.env.FRONTEND_URL) || 'http://localhost:5173';
   const defaultBackUrls = {
-    success: `${process.env.FRONTEND_URL}/payment/success`,
-    failure: `${process.env.FRONTEND_URL}/payment/failure`,
-    pending: `${process.env.FRONTEND_URL}/payment/pending`
+    success: `${frontendBase}/superadmin/pagos-test`,
+    failure: `${frontendBase}/payment/failure`,
+    pending: `${frontendBase}/payment/pending`
   };
 
   const body = {
@@ -39,21 +45,77 @@ export const createPreference = async (items, orderId, backUrls = {}) => {
     back_urls: { ...defaultBackUrls, ...backUrls }
   };
 
-  if (!isLocalhost(process.env.BACKEND_URL)) {
-    body.notification_url = `${process.env.BACKEND_URL}/api/payments/webhook`;
+  const backendClean = cleanUrl(process.env.BACKEND_URL);
+  if (!isLocalhost(backendClean)) {
+    body.notification_url = `${backendClean}/api/payments/webhook`;
   }
 
-  if (process.env.MP_AUTO_RETURN) {
-    body.auto_return = process.env.MP_AUTO_RETURN;
+  const autoReturn = String(process.env.MP_AUTO_RETURN || '').trim().replace(/^["']|["']$/g, '');
+  if (autoReturn) {
+    if (isLocalhost(frontendBase)) {
+      console.warn('[MP] MP_AUTO_RETURN=approved configurado pero FRONTEND_URL es localhost (http://localhost:5173). Mercado Pago rechaza auto_return con localhost/http y exige https público + Checkout Pro habilitado.');
+      console.warn('[MP] Se omite auto_return y se usará botón "Volver al sitio" + polling automático cada 5s (ya implementado en /superadmin/pagos-test). Para probar auto_return real usa un túnel https: ej. ngrok http 5173 y FRONTEND_URL=https://xxxx.ngrok-free.app');
+      // No se envía auto_return en localhost para evitar "auto_return invalid"
+    } else if (!body.back_urls?.success) {
+      console.warn('[MP] MP_AUTO_RETURN activo pero back_urls.success indefinido – se omite auto_return');
+    } else {
+      body.auto_return = autoReturn;
+    }
   }
 
-  const response = await preference.create({ body });
-  return response;
+  if (process.env.MP_SANDBOX === 'true' || process.env.NODE_ENV === 'development') {
+    console.log('[MP] createPreference body:', JSON.stringify({ ...body, items: body.items?.length + ' items' }, null, 2));
+  }
+
+  try {
+    const response = await preference.create({ body });
+    return response;
+  } catch (err) {
+    const msg = JSON.stringify(err?.cause || err?.message || err).toLowerCase();
+    const isAutoReturnError = msg.includes('auto_return') || msg.includes('back_url');
+    if (isAutoReturnError && body.auto_return) {
+      console.warn('[MP] auto_return rechazado por MP (probable localhost/http sin HTTPS o cuenta sin Checkout Pro). Reintentando sin auto_return -> usará botón "Volver al sitio".');
+      console.warn('[MP] Para auto_return real necesitas FRONTEND_URL https público (ngrok) y Checkout Pro habilitado.');
+      delete body.auto_return;
+      if (process.env.MP_SANDBOX === 'true' || process.env.NODE_ENV === 'development') {
+        console.log('[MP] reintentando createPreference sin auto_return, body:', JSON.stringify({ ...body, items: body.items?.length + ' items' }, null, 2));
+      }
+      const retry = await preference.create({ body });
+      return retry;
+    }
+    // No es error de auto_return, propagar
+    throw err;
+  }
 };
 
 export const getPayment = async (paymentId) => {
   const payment = new Payment(client);
-  return await payment.get({ id: paymentId });
+  try {
+    return await payment.get({ id: paymentId });
+  } catch (err) {
+    // Normalizar errores del SDK de MP a errores con statusCode para el handler
+    const status = err?.status || err?.statusCode;
+    const apiErr = err?.cause || err?.error || err?.message;
+    // MPNotFoundError, 404 o code 2000 = payment not found
+    const isNotFound =
+      status === 404 ||
+      err?.name === 'MPNotFoundError' ||
+      err?.error === 'not_found' ||
+      err?.causes?.some?.((c) => c?.code === 2000) ||
+      String(apiErr).toLowerCase().includes('not_found');
+
+    if (isNotFound) {
+      const e = new Error(`Pago ${paymentId} no encontrado en Mercado Pago`);
+      e.statusCode = 404;
+      e.code = 'payment_not_found';
+      e.paymentId = String(paymentId);
+      e.cause = err;
+      throw e;
+    }
+    // Si el SDK trae status pero no statusCode, propagarlo
+    if (status && !err.statusCode) err.statusCode = status;
+    throw err;
+  }
 };
 
 export const verifySignature = (req) => {
