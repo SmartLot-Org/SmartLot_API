@@ -8,11 +8,18 @@ dotenv.config();
 
 const { Pool } = pg;
 
+function resolveSsl() {
+  const url = process.env.DATABASE_URL || '';
+  if (url.includes('sslmode=disable')) return false;
+  if (process.env.DB_CA_CERT) {
+    return { ca: process.env.DB_CA_CERT, rejectUnauthorized: true };
+  }
+  return { rejectUnauthorized: false };
+}
+
 const poolInstance = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: true }
-    : { rejectUnauthorized: false },
+  ssl: resolveSsl(),
 });
 
 poolInstance.connect((err, client, release) => {
