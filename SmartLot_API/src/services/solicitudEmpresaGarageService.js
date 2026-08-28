@@ -143,10 +143,12 @@ export default class SolicitudEmpresaGarageService {
 
     acceptAsync = async (id, usuario) => {
         if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) fail('Solo el dueño del garage puede aceptar solicitudes.', 403);
-        const solicitud = await this.repo.acceptAsync(id, usuario.id);
+        const resultado = await this.repo.acceptAsync(id, usuario.id);
+        const solicitud = resultado.solicitud;
         // Notificar a los admins de la empresa (best-effort, try/catch)
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(solicitud.id_garage);
             const sede = await pool.query('SELECT id, id_empresa FROM sedes WHERE id = $1', [solicitud.id_sede]);
             const idEmpresa = sede.rows[0] ? sede.rows[0].id_empresa : null;
             const idSede = sede.rows[0] ? sede.rows[0].id : null;
@@ -156,7 +158,7 @@ export default class SolicitudEmpresaGarageService {
                 for (const admin of admins) {
                     await this.notificacionService.crearAsync(
                         admin.id,
-                        `${actorNombre} ha ${solicitud.estado === 'aceptada' ? 'aceptado' : 'rechazado'} la solicitud de trato.`,
+                        `${actorNombre} ha ${solicitud.estado === 'aceptada' ? 'aceptado' : 'rechazado'} la solicitud de trato para ${garageNombre}.`,
                         'solicitud_empresa_garage',
                         actorNombre
                     );
@@ -165,7 +167,7 @@ export default class SolicitudEmpresaGarageService {
         } catch (err) {
             console.error('Error al crear notificación de acept/rechazo:', err);
         }
-        return solicitud;
+        return resultado;
     };
 
     rejectAsync = async (id, usuario) => {
@@ -174,6 +176,7 @@ export default class SolicitudEmpresaGarageService {
         // Notificar a los admins de la empresa (best-effort, try/catch)
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(solicitud.id_garage);
             const sede = await pool.query('SELECT id, id_empresa FROM sedes WHERE id = $1', [solicitud.id_sede]);
             const idEmpresa = sede.rows[0] ? sede.rows[0].id_empresa : null;
             const idSede = sede.rows[0] ? sede.rows[0].id : null;
@@ -183,7 +186,7 @@ export default class SolicitudEmpresaGarageService {
                 for (const admin of admins) {
                     await this.notificacionService.crearAsync(
                         admin.id,
-                        `${actorNombre} ha ${solicitud.estado === 'rechazada' ? 'rechazado' : 'aceptado'} la solicitud de trato.`,
+                        `${actorNombre} ha ${solicitud.estado === 'rechazada' ? 'rechazado' : 'aceptado'} la solicitud de trato para ${garageNombre}.`,
                         'solicitud_empresa_garage',
                         actorNombre
                     );
