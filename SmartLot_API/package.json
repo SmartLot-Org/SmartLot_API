@@ -38,7 +38,8 @@
     "mailtrap": "^4.6.0",
     "mercadopago": "^3.3.0",
     "pg": "^8.20.0",
-    "routes": "^2.1.0"
+    "routes": "^2.1.0",
+    "undici": "^8.10.1"
   },
   "devDependencies": {
     "supertest": "^7.2.2"
