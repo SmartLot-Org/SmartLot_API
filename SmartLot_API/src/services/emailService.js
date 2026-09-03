@@ -162,6 +162,36 @@ export const plantillaCambioContraseña = (nombre) => {
     return layout(cuerpo);
 };
 
+/**
+ * Plantilla de recuperación de contraseña (código de verificación).
+ */
+export const plantillaRecuperoContraseña = (nombre, codigo) => {
+    const cuerpo = `
+    <div style="padding:36px 32px 32px;background-color:${BRAND.surface};">
+        <h2 style="margin:0 0 16px;font-family:${FONT_DISPLAY};font-weight:800;font-size:22px;color:${BRAND.text};letter-spacing:-0.02em;">Hola, ${nombre}</h2>
+        <p style="margin:0 0 16px;font-family:${FONT_BODY};font-size:15px;line-height:1.7;color:${BRAND.bodyText};">
+            Recibiste este correo porque solicitaste restablecer tu contraseña en <strong>SmartLot</strong>.
+        </p>
+        <p style="margin:0 0 24px;font-family:${FONT_BODY};font-size:15px;line-height:1.7;color:${BRAND.bodyText};">
+            Tu código de verificación es:
+        </p>
+        <div style="background:${BRAND.bg};border:2px dashed ${BRAND.blue};border-radius:12px;padding:24px;text-align:center;margin:24px 0;">
+            <span style="font-family:'Courier New', monospace;font-size:32px;font-weight:700;letter-spacing:8px;color:${BRAND.navy};">${codigo}</span>
+        </div>
+        <p style="margin:0 0 8px;font-family:${FONT_BODY};font-size:13px;color:${BRAND.muted};text-align:center;">
+            Este código expira en <strong>10 minutos</strong>. No lo compartas con nadie.
+        </p>
+        ${cajaInfo({
+            titulo: '¿No solicitaste este cambio?',
+            lineas: [['', 'Si no solicitaste restablecer tu contraseña, puedes ignorar este correo. Tu cuenta permanece segura.']],
+            variante: 'alerta'
+        })}
+        <p style="text-align:center;margin:28px 0 8px;">${boton(`${FRONTEND_URL}/login`, 'Ir a SmartLot')}</p>
+    </div>`;
+
+    return layout(cuerpo);
+};
+
 // ─── Plantillas desde base de datos ───────────────────────────────
 const TPL_CACHE_TTL_MS = 60 * 1000;
 const tplCache = new Map();
@@ -246,6 +276,10 @@ const FALLBACKS = {
     cambio_contraseña: (v = {}) => ({
         asunto: 'Contraseña Actualizada - SmartLot',
         html: plantillaCambioContraseña(v.nombre ?? '')
+    }),
+    recuperar_contraseña: (v = {}) => ({
+        asunto: 'Código de Verificación - SmartLot',
+        html: plantillaRecuperoContraseña(v.nombre ?? '', v.codigo ?? '')
     })
 };
 

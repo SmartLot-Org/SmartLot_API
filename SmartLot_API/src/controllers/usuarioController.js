@@ -137,6 +137,76 @@ router.post('/logout', (req, res) => {
     res.status(200).json({ message: 'Sesion cerrada exitosamente.' });
 });
 
+// RECUPERAR CLAVE - solicitar código de verificación
+router.post('/recuperar-clave', authRateLimiter, async (req, res) => {
+    const { email } = req.body;
+
+    if (!email || typeof email !== 'string') {
+        return res.status(200).json({ message: 'Si el email está registrado, te enviamos un código de verificación.' });
+    }
+
+    if (!isValidEmail(email)) {
+        return res.status(200).json({ message: 'Si el email está registrado, te enviamos un código de verificación.' });
+    }
+
+    const result = await svc.solicitarRecuperoAsync(email.trim().toLowerCase());
+    res.status(200).json(result);
+});
+
+// LOGIN CON CÓDIGO - login directo con código de verificación (sin cambiar contraseña)
+router.post('/login-con-codigo', authRateLimiter, async (req, res) => {
+    const { email, codigo } = req.body;
+
+    if (!email || typeof email !== 'string' || !isValidEmail(email)) {
+        throwError('El email es requerido y debe tener un formato válido.', 400);
+    }
+    if (!codigo || typeof codigo !== 'string' || !/^\d{6}$/.test(codigo)) {
+        throwError('El código debe ser numérico de 6 dígitos.', 400);
+    }
+
+    const data = await svc.loginConCodigoAsync(email.trim().toLowerCase(), codigo);
+
+    res.cookie('access_token', data.access_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000
+    });
+
+    res.cookie('refresh_session_id', data.refresh_session_id, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/api/usuario/refresh',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+    });
+
+    res.status(200).json({
+        usuario: data.usuario,
+        access_token: data.access_token,
+        token_type: 'Bearer',
+        expires_in: '15m'
+    });
+});
+
+// RESTABLECER CLAVE - validar código y cambiar contraseña
+router.post('/restablecer-clave', authRateLimiter, async (req, res) => {
+    const { email, codigo, contraseña } = req.body;
+
+    if (!email || typeof email !== 'string' || !isValidEmail(email)) {
+        throwError('El email es requerido y debe tener un formato válido.', 400);
+    }
+    if (!codigo || typeof codigo !== 'string' || !/^\d{6}$/.test(codigo)) {
+        throwError('El código debe ser numérico de 6 dígitos.', 400);
+    }
+    if (!contraseña || !isValidPassword(contraseña)) {
+        throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
+    }
+
+    const result = await svc.restablecerClaveAsync(email.trim().toLowerCase(), codigo, contraseña);
+    res.status(200).json(result);
+});
+
 // IMPERSONATE (SUPERADMIN only) - returns target user data for frontend impersonation
 router.post('/impersonate', authMiddleware, requireRole(4), async (req, res) => {
     const { id } = req.body;

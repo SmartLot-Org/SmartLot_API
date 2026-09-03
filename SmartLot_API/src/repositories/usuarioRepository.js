@@ -267,4 +267,59 @@ export default class UsuarioRepository {
             return result.rowCount > 0;
         } catch (error) { console.error(error); return false; }
     }
+
+    invalidatePreviousResetCodesAsync = async (id_usuario) => {
+        try {
+            await pool.query(
+                `UPDATE password_reset_codes
+                 SET usado = true
+                 WHERE id_usuario = $1 AND usado = false AND expires_at > NOW()`,
+                [id_usuario]
+            );
+        } catch (error) {
+            console.error('Error en invalidatePreviousResetCodesAsync:', error);
+        }
+    }
+
+    createResetCodeAsync = async (id_usuario, codigoHash, expiresAt) => {
+        try {
+            const result = await pool.query(
+                `INSERT INTO password_reset_codes (id_usuario, codigo_hash, expires_at)
+                 VALUES ($1, $2, $3) RETURNING id`,
+                [id_usuario, codigoHash, expiresAt]
+            );
+            return result.rows[0]?.id ?? null;
+        } catch (error) {
+            console.error('Error en createResetCodeAsync:', error);
+            return null;
+        }
+    }
+
+    getValidResetCodeAsync = async (id_usuario) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, codigo_hash, expires_at
+                 FROM password_reset_codes
+                 WHERE id_usuario = $1 AND usado = false AND expires_at > NOW()
+                 ORDER BY creado_en DESC
+                 LIMIT 1`,
+                [id_usuario]
+            );
+            return result.rows[0] ?? null;
+        } catch (error) {
+            console.error('Error en getValidResetCodeAsync:', error);
+            return null;
+        }
+    }
+
+    markResetCodeUsedAsync = async (id) => {
+        try {
+            await pool.query(
+                `UPDATE password_reset_codes SET usado = true WHERE id = $1`,
+                [id]
+            );
+        } catch (error) {
+            console.error('Error en markResetCodeUsedAsync:', error);
+        }
+    }
 }

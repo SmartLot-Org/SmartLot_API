@@ -378,6 +378,173 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         return result;
     }
 
+    solicitarRecuperoAsync = async (email) => {
+        if (!email || typeof email !== 'string' || !email.includes('@')) {
+            return { message: 'Si el email está registrado, te enviamos un código de verificación.' };
+        }
+
+        const usuario = await this.repo.getByEmailAsync(email.trim().toLowerCase());
+
+        if (!usuario || usuario.activo === false) {
+            return { message: 'Si el email está registrado, te enviamos un código de verificación.' };
+        }
+
+        await this.repo.invalidatePreviousResetCodesAsync(usuario.id);
+
+        const codigo = Math.floor(100000 + Math.random() * 900000).toString();
+        const codigoHash = await bcrypt.hash(codigo, BCRYPT_ROUNDS);
+
+        const expiraEn = new Date(Date.now() + 10 * 60 * 1000);
+
+        await this.repo.createResetCodeAsync(usuario.id, codigoHash, expiraEn);
+
+        const nombreCompleto = `${usuario.nombre ?? ''} ${usuario.apellido ?? ''}`.trim() || 'Usuario';
+        try {
+            await enviarCorreoDesdePlantilla(usuario.email, 'recuperar_contraseña', { nombre: nombreCompleto, codigo });
+        } catch (err) {
+            console.error('Error al enviar correo de recuperación de contraseña:', err);
+        }
+
+        return { message: 'Si el email está registrado, te enviamos un código de verificación.' };
+    }
+
+    loginConCodigoAsync = async (email, codigo) => {
+        if (!email || typeof email !== 'string' || !email.includes('@')) {
+            const error = new Error('Código o email inválidos.');
+            error.statusCode = 401;
+            throw error;
+        }
+        if (!codigo || typeof codigo !== 'string' || !/^\d{6}$/.test(codigo)) {
+            const error = new Error('Código inválido.');
+            error.statusCode = 401;
+            throw error;
+        }
+
+        const usuario = await this.repo.getByEmailAsync(email.trim().toLowerCase());
+
+        if (!usuario || usuario.activo === false) {
+            const error = new Error('Código o email inválidos.');
+            error.statusCode = 401;
+            throw error;
+        }
+
+        const resetCode = await this.repo.getValidResetCodeAsync(usuario.id);
+
+        if (!resetCode) {
+            const error = new Error('Código inválido o expirado.');
+            error.statusCode = 401;
+            throw error;
+        }
+
+        const coincide = await bcrypt.compare(codigo, resetCode.codigo_hash);
+
+        if (!coincide) {
+            const error = new Error('Código inválido.');
+            error.statusCode = 401;
+            throw error;
+        }
+
+        await this.repo.markResetCodeUsedAsync(resetCode.id);
+
+        const { contraseña, ...usuarioSinContraseña } = usuario;
+
+        const payload = {
+            id: usuario.id,
+            email: usuario.email,
+            id_rol: usuario.id_rol,
+            id_empresa: usuario.id_empresa,
+            id_sede: usuario.id_sede,
+            token_version: usuario.token_version,
+            ...(usuario.id_garage != null ? { id_garage: usuario.id_garage } : {})
+        };
+
+        const accessToken = jwt.sign(
+            payload,
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
+        );
+
+        const refreshToken = jwt.sign(
+            { id: usuario.id, token_version: usuario.token_version, type: 'refresh' },
+            process.env.JWT_REFRESH_SECRET,
+            { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' }
+        );
+
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const sessionId = await this.repo.createSessionAsync(
+            usuario.id,
+            usuario.token_version,
+            refreshToken,
+            expiresAt
+        );
+
+        return {
+            usuario: usuarioSinContraseña,
+            access_token: accessToken,
+            refresh_session_id: sessionId,
+            token_type: 'Bearer',
+            expires_in: process.env.JWT_EXPIRES_IN || '15m'
+        };
+    }
+
+    restablecerClaveAsync = async (email, codigo, nuevaContraseña) => {
+        if (!email || typeof email !== 'string' || !email.includes('@')) {
+            const error = new Error('Datos inválidos.');
+            error.statusCode = 400;
+            throw error;
+        }
+        if (!codigo || typeof codigo !== 'string' || !/^\d{6}$/.test(codigo)) {
+            const error = new Error('Código inválido.');
+            error.statusCode = 400;
+            throw error;
+        }
+        if (!nuevaContraseña || typeof nuevaContraseña !== 'string' || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(nuevaContraseña)) {
+            const error = new Error('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const usuario = await this.repo.getByEmailAsync(email.trim().toLowerCase());
+
+        if (!usuario || usuario.activo === false) {
+            const error = new Error('Código o email inválidos.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const resetCode = await this.repo.getValidResetCodeAsync(usuario.id);
+
+        if (!resetCode) {
+            const error = new Error('Código inválido o expirado.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const coincide = await bcrypt.compare(codigo, resetCode.codigo_hash);
+
+        if (!coincide) {
+            const error = new Error('Código inválido.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const hash = await bcrypt.hash(nuevaContraseña, BCRYPT_ROUNDS);
+
+        await this.repo.incrementTokenVersionAsync(usuario.id);
+        await this.repo.deleteUserSessionsAsync(usuario.id);
+        await this.repo.updateContraseñaAsync(usuario.id, hash, usuario.id);
+        await this.repo.markResetCodeUsedAsync(resetCode.id);
+
+        const nombreCompleto = `${usuario.nombre ?? ''} ${usuario.apellido ?? ''}`.trim() || 'Usuario';
+        try {
+            await enviarCorreoDesdePlantilla(usuario.email, 'cambio_contraseña', { nombre: nombreCompleto });
+        } catch (err) {
+            console.error('Error al enviar correo de cambio de contraseña:', err);
+        }
+
+        return { message: 'Contraseña restablecida exitosamente.' };
+    }
+
     deleteAsync = async (id, requestingUser = null) => {
         const usuario = await this.repo.getByIdAsync(id);
         if (!usuario) {
