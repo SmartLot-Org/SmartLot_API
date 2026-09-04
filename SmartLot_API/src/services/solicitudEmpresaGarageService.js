@@ -227,10 +227,6 @@ export default class SolicitudEmpresaGarageService {
         }
         return result;
     };
-<<<<<<< HEAD
-}
-=======
-
     createModificationAsync = async (input, usuario) => {
         if (!hasRole(usuario, 1, ROLE_NAMES.ADMIN)) fail('Solo un administrador puede solicitar modificaciones.', 403);
         const idEmpresa = Number(usuario?.id_empresa);
@@ -346,4 +342,3 @@ export default class SolicitudEmpresaGarageService {
         return solicitud;
     };
 }
->>>>>>> f91cefec9dd7791174429193fa695789347445d7

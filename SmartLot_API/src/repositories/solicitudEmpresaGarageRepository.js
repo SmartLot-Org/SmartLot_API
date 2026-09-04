@@ -62,16 +62,10 @@ export default class SolicitudEmpresaGarageRepository {
                 fail('La cantidad solicitada supera las cocheras disponibles.', 409);
             }
             const result = await client.query(
-<<<<<<< HEAD
-                `INSERT INTO solicitudes (id_sede,id_garage,descripcion,cantidad_cocheras,estado,modalidad_pago)
-                 VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-                [entity.id_sede, entity.id_garage, entity.descripcion, entity.cantidad_cocheras, ESTADOS_SOLICITUD.PENDIENTE, entity.modalidad_pago]
-=======
-                `INSERT INTO solicitudes (id_sede,id_garage,descripcion,cantidad_cocheras,estado,tipo_solicitud,id_trato)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+                `INSERT INTO solicitudes (id_sede,id_garage,descripcion,cantidad_cocheras,estado,modalidad_pago,tipo_solicitud,id_trato)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
                 [entity.id_sede, entity.id_garage, entity.descripcion, entity.cantidad_cocheras,
-                 ESTADOS_SOLICITUD.PENDIENTE, entity.tipo_solicitud || 'nueva', entity.id_trato || null]
->>>>>>> f91cefec9dd7791174429193fa695789347445d7
+                 ESTADOS_SOLICITUD.PENDIENTE, entity.modalidad_pago || null, entity.tipo_solicitud || 'nueva', entity.id_trato || null]
             );
             await client.query('COMMIT');
             return result.rows[0];
