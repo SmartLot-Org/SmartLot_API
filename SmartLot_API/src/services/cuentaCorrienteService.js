@@ -101,21 +101,26 @@ export default class CuentaCorrienteService {
             if (!groups.has(key)) groups.set(key, {
                 idEmpresa: row.id_empresa, empresa: row.empresa, idSede: row.id_sede, sede: row.sede,
                 idGarage: row.id_garage, garage: row.garage, periodo: row.periodo,
-                reservasUtilizadas: 0, minutosTotales: 0, importeGenerado: 0, movimientos: [],
+                reservasUtilizadas: 0, minutosTotales: 0, importeGenerado: 0,
+                importeEmpresas: 0, importeEmpleados: 0, movimientos: [],
             });
             const group = groups.get(key);
             const importe = money(row.importe_generado);
             group.reservasUtilizadas += 1;
             group.minutosTotales += Number(row.minutos_facturados);
             group.importeGenerado = money(group.importeGenerado + importe);
+            if (row.responsable_pago === 'empresa') group.importeEmpresas = money(group.importeEmpresas + importe);
+            else group.importeEmpleados = money(group.importeEmpleados + importe);
             group.movimientos.push({ idConsumo: Number(row.id), idReserva: row.id_reserva, fechaInicio: row.fecha_inicio,
                 fechaFin: row.fecha_fin, tipoVehiculo: row.tipo_vehiculo, minutosUtilizados: Number(row.minutos_facturados),
-                tarifaHoraAplicada: money(row.tarifa_hora_aplicada), importeGenerado: importe });
+                tarifaHoraAplicada: money(row.tarifa_hora_aplicada), importeGenerado: importe,
+                responsablePago: row.responsable_pago });
         }
         const items = [...groups.values()];
         const summary = items.reduce((acc, item) => ({ reservasUtilizadas: acc.reservasUtilizadas + item.reservasUtilizadas,
-            minutosTotales: acc.minutosTotales + item.minutosTotales, importeGenerado: money(acc.importeGenerado + item.importeGenerado) }),
-        { reservasUtilizadas: 0, minutosTotales: 0, importeGenerado: 0 });
+            minutosTotales: acc.minutosTotales + item.minutosTotales, importeGenerado: money(acc.importeGenerado + item.importeGenerado),
+            importeEmpresas: money(acc.importeEmpresas + item.importeEmpresas), importeEmpleados: money(acc.importeEmpleados + item.importeEmpleados) }),
+        { reservasUtilizadas: 0, minutosTotales: 0, importeGenerado: 0, importeEmpresas: 0, importeEmpleados: 0 });
         return { items, summary };
     };
 }

@@ -3,6 +3,7 @@ class Vehiculo {
     id_usuario;
     id_modelo;
     patente;
+    tipo_vehiculo;
     Borrado;
 }
 

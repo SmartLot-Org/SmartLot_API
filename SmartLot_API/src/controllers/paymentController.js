@@ -18,7 +18,7 @@ function throwError(message, statusCode) {
   throw error;
 }
 
-async function savePaymentRecord(paymentData, idEmpresa = null) {
+async function savePaymentRecord(paymentData, idEmpresa = null, db = pool) {
   const {
     id: mpPaymentId,
     preference_id: mpPreferenceId,
@@ -71,8 +71,32 @@ async function savePaymentRecord(paymentData, idEmpresa = null) {
     idEmpresa
   ];
 
-  const result = await pool.query(query, values);
+  const result = await db.query(query, values);
   return result.rows[0];
+}
+
+async function persistPaymentAndConfirmReservation(paymentData) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const idReserva = Number(paymentData?.metadata?.id_reserva);
+    const reserva = Number.isInteger(idReserva) ? (await client.query(
+      `SELECT r.*,u.id_empresa FROM reservas r JOIN usuarios u ON u.id=r.id_usuario
+        WHERE r.id=$1 FOR UPDATE OF r`, [idReserva]
+    )).rows[0] : null;
+    await savePaymentRecord(paymentData, reserva?.id_empresa ?? null, client);
+    if (paymentData.status === 'approved' && reserva) {
+      const amountMatches = Number(paymentData.transaction_amount) === Number(reserva.importe_estimado);
+      if (reserva.estado_reserva === 'pendiente_pago' && new Date(reserva.retencion_pago_hasta) > new Date() &&
+          reserva.responsable_pago === 'empleado' && amountMatches) {
+        await client.query(`UPDATE reservas SET estado_reserva='confirmada',retencion_pago_hasta=NULL WHERE id=$1`, [idReserva]);
+      } else if (reserva.estado_reserva === 'pendiente_pago' && new Date(reserva.retencion_pago_hasta) <= new Date()) {
+        await client.query(`UPDATE reservas SET estado_reserva='expirada' WHERE id=$1`, [idReserva]);
+      }
+    }
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 async function updatePaymentStatus(mpPaymentId, status, metadata = {}) {
@@ -116,17 +140,24 @@ async function markWebhookProcessed(mpEventId, error = null) {
 
 router.post('/preference', async (req, res, next) => {
   try {
-    const { items, orderId, backUrls } = req.body;
+    const { idReserva, backUrls } = req.body;
+    if (!isValidId(String(idReserva))) throwError('idReserva is required', 400);
+    const reserva = (await pool.query(
+      `UPDATE reservas SET estado_reserva='expirada'
+        WHERE id=$1 AND estado_reserva='pendiente_pago' AND retencion_pago_hasta<=NOW()
+        RETURNING id`, [idReserva]
+    )).rowCount ? null : (await pool.query(
+      `SELECT r.* FROM reservas r WHERE r.id=$1 AND r.id_usuario=$2 AND r.responsable_pago='empleado'`,
+      [idReserva, req.usuario.id]
+    )).rows[0];
+    if (!reserva) throwError('La reserva no existe, expiro o no pertenece al empleado.', 403);
+    if (reserva.estado_reserva !== 'pendiente_pago') throwError('La reserva no esta pendiente de pago.', 409);
+    const existing = (await pool.query(`SELECT mp_preference_id FROM pagos WHERE id_reserva=$1 AND mp_preference_id IS NOT NULL ORDER BY id DESC LIMIT 1`, [idReserva])).rows[0];
+    if (existing) return res.status(200).json({ preferenceId: existing.mp_preference_id, reused: true, sandbox: isSandbox() });
+    const orderId = `reserva-${reserva.id}`;
+    const items = [{ title: `Reserva SmartLot #${reserva.id}`, quantity: 1, unit_price: Number(reserva.importe_estimado), currency_id: 'ARS' }];
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      throwError('Items array is required', 400);
-    }
-
-    if (!orderId) {
-      throwError('orderId is required', 400);
-    }
-
-    const preference = await createPreference(items, orderId, backUrls);
+    const preference = await createPreference(items, orderId, backUrls, { id_reserva: reserva.id });
 
     await pool.query(
       `INSERT INTO pagos (id_orden_externa, mp_preference_id, monto, moneda, descripcion, id_empresa, metadata)
@@ -139,7 +170,7 @@ router.post('/preference', async (req, res, next) => {
         'ARS',
         `Reserva ${orderId}`,
         req.usuario?.id_empresa || null,
-        JSON.stringify({ items, orderId })
+        JSON.stringify({ items, orderId, id_reserva: reserva.id })
       ]
     );
 
@@ -261,7 +292,7 @@ router.post('/webhook', async (req, res, next) => {
 
     if (tipoEvento === 'payment.created' || tipoEvento === 'payment.updated') {
       const payment = await getPayment(data.id);
-      await savePaymentRecord(payment);
+      await persistPaymentAndConfirmReservation(payment);
     } else if (tipoEvento === 'payment.refunded') {
       const payment = await getPayment(data.id);
       await updatePaymentStatus(data.id, 'refunded', { refundedAt: new Date().toISOString() });

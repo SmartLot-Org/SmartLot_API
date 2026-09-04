@@ -5,6 +5,7 @@ import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import pool from '../database/db.js';
 
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
+const PAYMENT_MODALITIES = new Set(['empresa_cubre_cupo', 'empleado_paga_todo']);
 
 export default class SolicitudEmpresaGarageService {
     constructor() {
@@ -78,9 +79,11 @@ export default class SolicitudEmpresaGarageService {
         const idSede = Number(input.id_sede);
         const idGarage = Number(input.id_garage);
         const cantidad = Number(input.cantidad_cocheras);
+        const modalidadPago = input.modalidad_pago;
         if (!Number.isInteger(idSede) || idSede <= 0) fail('id_sede debe ser un entero positivo.', 400);
         if (!Number.isInteger(idGarage) || idGarage <= 0) fail('id_garage debe ser un entero positivo.', 400);
         if (!Number.isInteger(cantidad) || cantidad <= 0) fail('cantidad_cocheras debe ser un entero mayor que cero.', 400);
+        if (!PAYMENT_MODALITIES.has(modalidadPago)) fail('modalidad_pago no es valida.', 400);
         if (usuario.id_sede && Number(usuario.id_sede) !== idSede) fail('No puede crear solicitudes para otra sede.', 403);
         let descripcion = null;
         if (input.descripcion !== undefined && input.descripcion !== null) {
@@ -96,6 +99,7 @@ export default class SolicitudEmpresaGarageService {
             id_garage: idGarage,
             cantidad_cocheras: cantidad,
             descripcion,
+            modalidad_pago: modalidadPago,
         });
 
         // Notificar a los dueños del garage (best-effort, try/catch)

@@ -5,7 +5,7 @@ export default class CuentaCorrienteRepository {
         const result = await client.query(
             `WITH datos AS (
                 SELECT r.id AS id_reserva,
-                       t.id AS id_trato,
+                       r.id_trato,
                        u.id_sede,
                        u.id_empresa,
                        r.id_garage,
@@ -13,31 +13,30 @@ export default class CuentaCorrienteRepository {
                        r.fecha_entrada AS fecha_inicio,
                        r.fecha_salida AS fecha_fin,
                        ROUND(EXTRACT(EPOCH FROM (r.fecha_salida - r.fecha_entrada)) / 60.0)::integer AS minutos_facturados,
-                       CASE v.tipo_vehiculo::text
-                           WHEN 'auto' THEN t.precio_auto
-                           WHEN 'moto' THEN t.precio_moto
-                           WHEN 'pickup' THEN t.precio_pickup
-                       END::numeric AS tarifa_hora_aplicada
+                       r.tarifa_hora_aplicada,
+                       r.modalidad_pago_aplicada,
+                       r.tipo_cupo,
+                       r.responsable_pago
                   FROM reservas r
                   JOIN usuarios u ON u.id = r.id_usuario
                   JOIN vehiculos v ON v.id = r.id_vehiculo
-                  JOIN trato_empresa_garage t
-                    ON t.id_sede = u.id_sede
-                   AND t.id_garage = r.id_garage
                  WHERE r.id = $1
                    AND r.entro = true
                    AND r.salio = true
                    AND COALESCE(r."Borrado", false) = false
+                   AND r.estado_reserva = 'confirmada'
                    AND r.fecha_salida > r.fecha_entrada
             ), insertado AS (
                 INSERT INTO consumos_reserva
                     (id_reserva, id_trato, id_sede, id_empresa, id_garage,
                      tipo_vehiculo, fecha_inicio, fecha_fin, minutos_facturados,
-                     tarifa_hora_aplicada, importe_generado)
+                     tarifa_hora_aplicada, importe_generado, modalidad_pago_aplicada,
+                     tipo_cupo, responsable_pago)
                 SELECT id_reserva, id_trato, id_sede, id_empresa, id_garage,
                        tipo_vehiculo, fecha_inicio, fecha_fin, minutos_facturados,
                        tarifa_hora_aplicada,
-                       ROUND(tarifa_hora_aplicada * minutos_facturados / 60.0, 2)
+                       ROUND(tarifa_hora_aplicada * minutos_facturados / 60.0, 2),
+                       modalidad_pago_aplicada, tipo_cupo, responsable_pago
                   FROM datos
                  WHERE tarifa_hora_aplicada IS NOT NULL
                    AND tarifa_hora_aplicada >= 0
@@ -60,11 +59,13 @@ export default class CuentaCorrienteRepository {
                     c.id_sede, s.nombre AS sede,
                     to_char(c.fecha_inicio, 'YYYY-MM') AS periodo,
                     c.fecha_inicio, c.fecha_fin, c.tipo_vehiculo::text AS tipo_vehiculo,
-                    c.minutos_facturados, c.tarifa_hora_aplicada, c.importe_generado
+                    c.minutos_facturados, c.tarifa_hora_aplicada, c.importe_generado,
+                    c.responsable_pago::text AS responsable_pago
                FROM consumos_reserva c
                JOIN garages g ON g.id = c.id_garage
                JOIN sedes s ON s.id = c.id_sede
               WHERE c.id_empresa = $1
+                AND c.responsable_pago = 'empresa'
                 AND ($2::integer IS NULL OR c.id_sede = $2)
                 AND ($3::text IS NULL OR c.fecha_inicio >= ($3 || '-01')::date
                      AND c.fecha_inicio < (($3 || '-01')::date + INTERVAL '1 month'))
@@ -82,7 +83,8 @@ export default class CuentaCorrienteRepository {
                     c.id_garage, g.nombre AS garage, c.id_sede, s.nombre AS sede,
                     to_char(c.fecha_inicio, 'YYYY-MM') AS periodo,
                     c.fecha_inicio, c.fecha_fin, c.tipo_vehiculo::text AS tipo_vehiculo,
-                    c.minutos_facturados, c.tarifa_hora_aplicada, c.importe_generado
+                    c.minutos_facturados, c.tarifa_hora_aplicada, c.importe_generado,
+                    c.responsable_pago::text AS responsable_pago
                FROM consumos_reserva c
                JOIN empresas e ON e.id = c.id_empresa
                JOIN garages g ON g.id = c.id_garage

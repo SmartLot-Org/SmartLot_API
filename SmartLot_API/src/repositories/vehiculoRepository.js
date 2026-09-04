@@ -51,8 +51,8 @@ export default class VehiculoRepository {
     createAsync = async (entity) => {
         try {
             const result = await pool.query(
-                'INSERT INTO vehiculos (id_usuario, id_modelo, patente) VALUES ($1, $2, $3) RETURNING *',
-                [entity.id_usuario, entity.id_modelo, entity.patente]
+                'INSERT INTO vehiculos (id_usuario, id_modelo, patente, tipo_vehiculo) VALUES ($1, $2, $3, $4) RETURNING *',
+                [entity.id_usuario, entity.id_modelo, entity.patente, entity.tipo_vehiculo]
             );
             return result.rows[0];
         } catch (error) { console.error(error); return null; }
@@ -60,9 +60,18 @@ export default class VehiculoRepository {
 
     updateAsync = async (id, entity) => {
         try {
+            const updates = [];
+            const values = [];
+            for (const column of ['id_usuario', 'id_modelo', 'patente', 'tipo_vehiculo']) {
+                if (entity[column] !== undefined) {
+                    values.push(entity[column]);
+                    updates.push(`${column} = $${values.length}`);
+                }
+            }
+            if (updates.length === 0) return await this.getByIdAsync(id);
             const result = await pool.query(
-                'UPDATE vehiculos SET id_usuario = $1, id_modelo = $2, patente = $3 WHERE id = $4 AND COALESCE("Borrado", false) = false RETURNING *',
-                [entity.id_usuario, entity.id_modelo, entity.patente, id]
+                `UPDATE vehiculos SET ${updates.join(', ')} WHERE id = $${values.length + 1} AND COALESCE("Borrado", false) = false RETURNING *`,
+                [...values, id]
             );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }
@@ -71,8 +80,8 @@ export default class VehiculoRepository {
     reactivateAsync = async (id, entity) => {
         try {
             const result = await pool.query(
-                'UPDATE vehiculos SET id_usuario = $1, id_modelo = $2, patente = $3, "Borrado" = false WHERE id = $4 RETURNING *',
-                [entity.id_usuario, entity.id_modelo, entity.patente, id]
+                'UPDATE vehiculos SET id_usuario = $1, id_modelo = $2, patente = $3, tipo_vehiculo = $4, "Borrado" = false WHERE id = $5 RETURNING *',
+                [entity.id_usuario, entity.id_modelo, entity.patente, entity.tipo_vehiculo, id]
             );
             return result.rows[0] ?? null;
         } catch (error) { console.error(error); return null; }

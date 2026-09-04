@@ -21,7 +21,8 @@ export default class VehiculoService {
             entity.id_usuario = requestingUser.id;
         }
 
-        await this._validarRelacionesAsync(entity);
+        const { modelo } = await this._validarRelacionesAsync(entity);
+        this._asignarTipoVehiculoSegunModelo(entity, modelo);
 
         // Validar patente única
         if (entity.patente) {
@@ -57,7 +58,14 @@ export default class VehiculoService {
             delete entity.id_usuario;
         }
 
-        await this._validarRelacionesAsync(entity);
+        // tipo_vehiculo proviene siempre del modelo; nunca se acepta del frontend.
+        delete entity.tipo_vehiculo;
+
+        const { modelo } = await this._validarRelacionesAsync(entity);
+        // Si cambia el modelo, se recalcula el tipo de vehículo a partir del nuevo modelo.
+        if (entity.id_modelo !== undefined) {
+            this._asignarTipoVehiculoSegunModelo(entity, modelo);
+        }
 
         // Validar patente única (excluyendo al vehículo actual)
         if (entity.patente) {
@@ -77,9 +85,11 @@ export default class VehiculoService {
     /**
      * Valida que las entidades relacionadas (usuario, modelo) existan en la BD.
      * Recopila todos los errores y los lanza juntos.
+     * Devuelve el modelo resuelto para poder derivar su tipo de vehículo.
      */
     _validarRelacionesAsync = async (entity) => {
         const errores = [];
+        let modelo = null;
 
         // Validar que el usuario exista
         if (entity.id_usuario) {
@@ -91,7 +101,7 @@ export default class VehiculoService {
 
         // Validar que el modelo exista
         if (entity.id_modelo) {
-            const modelo = await this.modeloService.getByIdAsync(entity.id_modelo);
+            modelo = await this.modeloService.getByIdAsync(entity.id_modelo);
             if (!modelo) {
                 errores.push(`El modelo con ID ${entity.id_modelo} no existe.`);
             }
@@ -102,5 +112,26 @@ export default class VehiculoService {
             error.statusCode = 400;
             throw error;
         }
+
+        return { modelo };
+    }
+
+    /**
+     * Asigna el tipo de vehículo tomándolo siempre del modelo asociado.
+     * Ignora cualquier tipo de vehículo enviado manualmente por el frontend.
+     * Si el modelo no tiene un tipo de vehículo, no crea/actualiza el registro.
+     */
+    _asignarTipoVehiculoSegunModelo = (entity, modelo) => {
+        // La fuente de verdad es siempre modelos.tipo_vehiculo.
+        delete entity.tipo_vehiculo;
+
+        const tipoVehiculo = modelo?.tipo_vehiculo;
+        if (!tipoVehiculo) {
+            const error = new Error(`El modelo con ID ${entity.id_modelo} no tiene un tipo de vehículo definido.`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        entity.tipo_vehiculo = tipoVehiculo;
     }
 }

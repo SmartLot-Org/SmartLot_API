@@ -39,6 +39,10 @@ router.get('/disponibilidad-por-hora', async (req, res) => {
     res.status(200).json(data);
 });
 
+router.post('/cotizacion', requireRole(2), async (req, res) => {
+    res.status(200).json(await svc.quoteAsync(req.body ?? {}, req.usuario));
+});
+
 // GET CONTROL DE ACCESO (admin, smartlot o garagista del garage)
 router.get('/control-acceso/:id_garage', requireRole(1, 3, 4), async (req, res) => {
     const idGarage = parseInt(req.params.id_garage, 10);
@@ -80,11 +84,10 @@ router.get('/:id', async (req, res) => {
 });
 
 // CREATE (POST)
-router.post('', authMiddleware, async (req, res) => {
+router.post('', authMiddleware, requireRole(2), async (req, res) => {
     const body = req.body ?? {};
 
-    const { id_usuario, id_garage, id_vehiculo, fecha_entrada, fecha_salida, dia } = body;
-    if (!isValidId(String(id_usuario))) throwError('El id_usuario es requerido y debe ser un número válido.', 400);
+    const { id_garage, id_vehiculo, fecha_entrada, fecha_salida, dia } = body;
     if (!isValidId(String(id_garage))) throwError('El id_garage es requerido y debe ser un número válido.', 400);
     if (!isValidId(String(id_vehiculo))) throwError('El id_vehiculo es requerido y debe ser un número válido.', 400);
     if (!isValidDate(fecha_entrada)) throwError('La fecha de entrada es requerida y debe ser una fecha válida.', 400);

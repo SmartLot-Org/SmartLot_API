@@ -10,6 +10,7 @@ import pool from '../database/db.js';
 const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
 
 const ROL_LABEL = { admin: 'admin', superadmin: 'superadmin' };
+const PAYMENT_MODALITIES = new Set(['empresa_cubre_cupo', 'empleado_paga_todo']);
 
 export default class TratoEmpresaGarageService {
     constructor() {
@@ -81,12 +82,14 @@ export default class TratoEmpresaGarageService {
         const idSede = Number(input.id_sede);
         const idGarage = Number(input.id_garage);
         const cantidad = Number(input.cantidad_cocheras);
+        const modalidadPago = input.modalidad_pago || 'empresa_cubre_cupo';
         if (![idSede, idGarage, cantidad].every(Number.isInteger) || Math.min(idSede,idGarage,cantidad) <= 0) fail('Sede, garage y cantidad deben ser enteros positivos.', 400);
         if (usuario.id_sede && Number(usuario.id_sede) !== idSede) fail('No puede operar con otra sede.', 403);
         const sede = await this.sedeService.getByIdAsync(idSede);
         if (!sede) fail('La sede no existe o esta inactiva.', 404);
         if (await this.repo.getBySedeGarageAsync(idSede, idGarage)) fail('Ya existe un trato para esa sede y garage.', 409);
-        return this.repo.createAgreementAsync({ id_sede: idSede, id_garage: idGarage, cantidad_cocheras: cantidad });
+        if (!PAYMENT_MODALITIES.has(modalidadPago)) fail('modalidad_pago no es valida.', 400);
+        return this.repo.createAgreementAsync({ id_sede: idSede, id_garage: idGarage, cantidad_cocheras: cantidad, modalidad_pago: modalidadPago });
     };
 
     updateAsync = async (id, changes, usuario) => {
@@ -114,6 +117,12 @@ export default class TratoEmpresaGarageService {
             console.error('Error al crear notificación de actualización de trato:', err);
         }
         return updated;
+    };
+    updatePaymentModalityAsync = async (id, modalidad, usuario) => {
+        if (!PAYMENT_MODALITIES.has(modalidad)) fail('modalidadPago no es valida.', 400);
+        const current = await this.getByIdAsync(id, usuario);
+        if (!this._adminCanManage(usuario, current)) fail('No puede modificar la modalidad de este trato.', 403);
+        return this.repo.updatePaymentModalityAsync(id, modalidad, usuario.id);
     };
     deleteAsync = async (id, usuario) => {
         const current = await this.getByIdAsync(id, usuario);

@@ -54,9 +54,9 @@ export default class SolicitudEmpresaGarageRepository {
                 fail('La cantidad solicitada supera las cocheras disponibles.', 409);
             }
             const result = await client.query(
-                `INSERT INTO solicitudes (id_sede,id_garage,descripcion,cantidad_cocheras,estado)
-                 VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-                [entity.id_sede, entity.id_garage, entity.descripcion, entity.cantidad_cocheras, ESTADOS_SOLICITUD.PENDIENTE]
+                `INSERT INTO solicitudes (id_sede,id_garage,descripcion,cantidad_cocheras,estado,modalidad_pago)
+                 VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+                [entity.id_sede, entity.id_garage, entity.descripcion, entity.cantidad_cocheras, ESTADOS_SOLICITUD.PENDIENTE, entity.modalidad_pago]
             );
             await client.query('COMMIT');
             return result.rows[0];
@@ -120,6 +120,7 @@ export default class SolicitudEmpresaGarageRepository {
                 precio_auto: Number(garage.precio_auto ?? 0),
                 precio_moto: Number(garage.precio_moto ?? 0),
                 precio_pickup: Number(garage.precio_pickup ?? 0),
+                modalidad_pago: solicitud.modalidad_pago,
             }, client);
             const updated = await client.query(
                 'UPDATE solicitudes SET estado=$1 WHERE id=$2 AND estado=$3 RETURNING *',
