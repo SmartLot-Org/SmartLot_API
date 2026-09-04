@@ -47,12 +47,42 @@ export default class TratoEmpresaGarageRepository {
     createWithClientAsync = async (entity, client) => {
         const result = await client.query(
             `INSERT INTO trato_empresa_garage
-                (id_sede,id_garage,cantidad_cocheras,precio_pickup,precio_auto,precio_moto)
-             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+                (id_sede,id_garage,cantidad_cocheras,precio_pickup,precio_auto,precio_moto,modalidad_pago)
+             VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
             [entity.id_sede, entity.id_garage, entity.cantidad_cocheras,
-             entity.precio_pickup, entity.precio_auto, entity.precio_moto]
+             entity.precio_pickup, entity.precio_auto, entity.precio_moto, entity.modalidad_pago]
         );
         return result.rows[0];
+    };
+
+    updatePaymentModalityAsync = async (id, modalidad, cambiadoPor) => {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const current = (await client.query(
+                `SELECT t.*, s.id_empresa FROM trato_empresa_garage t
+                 JOIN sedes s ON s.id=t.id_sede WHERE t.id=$1 FOR UPDATE OF t`, [id]
+            )).rows[0];
+            if (!current) throw Object.assign(new Error('El trato no existe.'), { statusCode: 404 });
+            if (current.modalidad_pago === modalidad) {
+                await client.query('COMMIT');
+                return { trato: current, changed: false };
+            }
+            const trato = (await client.query(
+                'UPDATE trato_empresa_garage SET modalidad_pago=$1 WHERE id=$2 RETURNING *', [modalidad, id]
+            )).rows[0];
+            await client.query(
+                `INSERT INTO historial_modalidad_trato
+                    (id_trato, modalidad_anterior, modalidad_nueva, cambiado_por)
+                 VALUES ($1,$2,$3,$4)`,
+                [id, current.modalidad_pago, modalidad, cambiadoPor]
+            );
+            await client.query('COMMIT');
+            return { trato: { ...trato, id_empresa: current.id_empresa }, changed: true };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally { client.release(); }
     };
 
     createAgreementAsync = async (entity) => {
@@ -74,10 +104,10 @@ export default class TratoEmpresaGarageRepository {
                 throw Object.assign(new Error('La suma de cocheras contratadas supera la capacidad total del garage.'), { statusCode: 409 });
             }
             const result = await client.query(
-                `INSERT INTO trato_empresa_garage (id_sede,id_garage,cantidad_cocheras,precio_pickup,precio_auto,precio_moto)
-                 VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+                `INSERT INTO trato_empresa_garage (id_sede,id_garage,cantidad_cocheras,precio_pickup,precio_auto,precio_moto,modalidad_pago)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
                 [entity.id_sede, entity.id_garage, entity.cantidad_cocheras,
-                 Number(garage.precio_pickup ?? 0), Number(garage.precio_auto ?? 0), Number(garage.precio_moto ?? 0)]
+                 Number(garage.precio_pickup ?? 0), Number(garage.precio_auto ?? 0), Number(garage.precio_moto ?? 0), entity.modalidad_pago]
             );
             await client.query('COMMIT');
             return result.rows[0];

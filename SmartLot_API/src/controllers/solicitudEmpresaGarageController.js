@@ -13,8 +13,8 @@ const parseId = (value) => {
 };
 
 router.post('', requireRole(1, ROLE_NAMES.ADMIN), async (req, res) => {
-    const { id_sede, id_garage, cantidad_cocheras, descripcion } = req.body;
-    res.status(201).json(await svc.createAsync({ id_sede, id_garage, cantidad_cocheras, descripcion }, req.usuario));
+    const { id_sede, id_garage, cantidad_cocheras, descripcion, modalidad_pago, modalidadPago } = req.body;
+    res.status(201).json(await svc.createAsync({ id_sede, id_garage, cantidad_cocheras, descripcion, modalidad_pago: modalidad_pago ?? modalidadPago }, req.usuario));
 });
 
 router.get('/enviadas', requireRole(1, ROLE_NAMES.ADMIN), async (req, res) => {
@@ -31,6 +31,14 @@ router.patch('/:id/aceptar', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, r
 
 router.patch('/:id/rechazar', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
     res.status(200).json(await svc.rejectAsync(parseId(req.params.id), req.usuario));
+});
+
+router.patch('/:id/autorizar-modificacion', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+    res.status(200).json(await svc.acceptModificationAsync(parseId(req.params.id), req.usuario));
+});
+
+router.patch('/:id/rechazar-modificacion', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+    res.status(200).json(await svc.rejectModificationAsync(parseId(req.params.id), req.usuario));
 });
 
 router.patch('/:id/cancelar', requireRole(1, ROLE_NAMES.ADMIN), async (req, res) => {

@@ -4,6 +4,12 @@
 
     BEGIN;
 
+    -- La cuenta de Admin solo muestra consumos cuyo responsable es la empresa.
+    -- Se agrega de forma idempotente porque instalaciones anteriores pueden no
+    -- tener todavía esta columna en el historial de consumos.
+    ALTER TABLE consumos_reserva
+        ADD COLUMN IF NOT EXISTS responsable_pago text;
+
     DO $$
     BEGIN
         IF to_regclass('public.reservas') IS NULL
@@ -77,7 +83,8 @@
 ), inserted_consumos AS (
         INSERT INTO consumos_reserva (
             id_reserva, id_trato, id_sede, id_empresa, id_garage, tipo_vehiculo,
-            fecha_inicio, fecha_fin, minutos_facturados, tarifa_hora_aplicada, importe_generado
+            fecha_inicio, fecha_fin, minutos_facturados, tarifa_hora_aplicada,
+            importe_generado, responsable_pago
         )
         SELECT
             r.id,
@@ -90,7 +97,8 @@
             s.fecha_salida,
             ROUND(EXTRACT(EPOCH FROM (s.fecha_salida - s.fecha_entrada)) / 60.0)::integer,
             s.tarifa_hora,
-            s.importe
+            s.importe,
+            'empresa'
         FROM test_reservas r
         JOIN specs s
         ON s.id_usuario = r.id_usuario
@@ -152,5 +160,15 @@ JOIN specs s
         WHERE p.mp_payment_id = 'TEST-MP-SEED-20260904-' || s.test_key
     )
     ON CONFLICT (mp_payment_id) DO NOTHING;
+
+    -- También corrige ejecuciones previas de esta migración, que podían haber
+    -- creado los consumos sin responsable_pago y por eso no aparecían en Admin.
+    UPDATE consumos_reserva c
+    SET responsable_pago = 'empresa', updated_at = NOW()
+    WHERE c.id_reserva IN (
+        SELECT p.id_reserva
+        FROM pagos p
+        WHERE p.mp_payment_id LIKE 'TEST-MP-SEED-20260904-%'
+    );
 
     COMMIT;

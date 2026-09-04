@@ -22,7 +22,7 @@ const cleanUrl = (url) => {
   return String(url).trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
 };
 
-export const createPreference = async (items, orderId, backUrls = {}) => {
+export const createPreference = async (items, orderId, backUrls = {}, metadata = {}) => {
   const preference = new Preference(client);
 
   const frontendBase = cleanUrl(process.env.FRONTEND_URL) || 'http://localhost:5173';
@@ -44,6 +44,7 @@ export const createPreference = async (items, orderId, backUrls = {}) => {
     external_reference: String(orderId),
     back_urls: { ...defaultBackUrls, ...backUrls }
   };
+  if (Object.keys(metadata).length) body.metadata = metadata;
 
   const backendClean = cleanUrl(process.env.BACKEND_URL);
   if (!isLocalhost(backendClean)) {

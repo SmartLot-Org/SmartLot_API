@@ -48,6 +48,12 @@ router.get('/:id', requireRole(...readRoles), async (req, res) => {
     res.status(200).json(await svc.getByIdAsync(parseId(req.params.id), req.usuario));
 });
 
+router.patch('/:id/modalidad-pago', requireRole(...writeRoles), async (req, res) => {
+    res.status(200).json(await svc.updatePaymentModalityAsync(
+        parseId(req.params.id), req.body?.modalidadPago, req.usuario
+    ));
+});
+
 router.post('', requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     if (hasRole(req.usuario, 4, ROLE_NAMES.SUPERADMIN)) {
         return res.status(201).json(await svc.createAsync(body(req.body), req.usuario));
@@ -57,6 +63,7 @@ router.post('', requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), asyn
         id_garage: req.body.id_garage,
         cantidad_cocheras: req.body.cantidad_cocheras,
         descripcion: req.body.descripcion,
+        modalidad_pago: req.body.modalidad_pago ?? req.body.modalidadPago,
     }, req.usuario);
     return res.status(201).json({ ...solicitud, tipo: 'solicitud' });
 });

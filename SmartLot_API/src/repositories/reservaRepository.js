@@ -7,6 +7,72 @@ export default class ReservaRepository {
         console.log('Estoy en: ReservaRepository.constructor()');
     }
 
+    expirePendingAsync = async (client = pool, id = null) => (await client.query(
+        `UPDATE reservas SET estado_reserva='expirada'
+          WHERE estado_reserva='pendiente_pago' AND retencion_pago_hasta<=NOW()
+            AND ($1::bigint IS NULL OR id=$1) RETURNING id`, [id]
+    )).rowCount;
+
+    quoteAndCreateWithClientAsync = async (entity, client, insert = true) => {
+        await this.expirePendingAsync(client);
+        const user = (await client.query(
+            `SELECT u.id,u.id_sede,COALESCE(u.id_empresa,s.id_empresa) AS id_empresa
+               FROM usuarios u
+               LEFT JOIN sedes s ON s.id=u.id_sede AND COALESCE(s."Borrado",false)=false
+              WHERE u.id=$1 AND COALESCE(u.activo,true)=true
+                AND COALESCE(u."Borrado",false)=false`,
+            [entity.id_usuario]
+        )).rows[0];
+        if (!user) throw Object.assign(new Error('El empleado no existe o esta inactivo.'), { statusCode: 403 });
+        if (!user.id_sede) throw Object.assign(new Error('El empleado no tiene una sede asignada.'), { statusCode: 409 });
+        if (!user.id_empresa) throw Object.assign(new Error('La sede del empleado no pertenece a una empresa activa.'), { statusCode: 409 });
+        const vehicle = (await client.query(`SELECT id,tipo_vehiculo::text tipo_vehiculo FROM vehiculos WHERE id=$1 AND id_usuario=$2 AND COALESCE("Borrado",false)=false`, [entity.id_vehiculo,user.id])).rows[0];
+        if (!vehicle) throw Object.assign(new Error('El vehiculo no pertenece al empleado autenticado.'), { statusCode: 403 });
+        const garage = (await client.query(`SELECT id,capacidad,estado FROM garages WHERE id=$1 AND COALESCE("Borrado",false)=false FOR UPDATE`, [entity.id_garage])).rows[0];
+        if (!garage || garage.estado === false) throw Object.assign(new Error('El garage no existe o no esta activo.'), { statusCode: 404 });
+        const trato = (await client.query(`SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 FOR UPDATE`, [user.id_sede,entity.id_garage])).rows[0];
+        if (!trato) throw Object.assign(new Error('No existe un trato activo para la sede y el garage.'), { statusCode: 409 });
+        const active = `COALESCE("Borrado",false)=false AND (estado_reserva='confirmada' OR (estado_reserva='pendiente_pago' AND retencion_pago_hasta>NOW())) AND fecha_entrada<$2::timestamptz AND fecha_salida>$1::timestamptz`;
+        if ((await client.query(`SELECT 1 FROM reservas WHERE (id_usuario=$3 OR id_vehiculo=$4) AND ${active} LIMIT 1`, [entity.fecha_entrada,entity.fecha_salida,user.id,vehicle.id])).rowCount) throw Object.assign(new Error('El empleado o vehiculo ya tiene una reserva en ese intervalo.'), { statusCode: 409 });
+        const counts = (await client.query(`SELECT COUNT(*) FILTER (WHERE id_trato=$4)::int trato,COUNT(*)::int garage FROM reservas WHERE id_garage=$3 AND ${active}`, [entity.fecha_entrada,entity.fecha_salida,entity.id_garage,trato.id])).rows[0];
+        if (Number(counts.garage)>=Number(garage.capacidad)) throw Object.assign(new Error('El garage no tiene capacidad general disponible.'), { statusCode: 409 });
+        const tipoCupo = Number(counts.trato)<Number(trato.cantidad_cocheras)?'dentro_cupo':'extra';
+        const responsable = trato.modalidad_pago==='empresa_cubre_cupo'&&tipoCupo==='dentro_cupo'?'empresa':'empleado';
+        const column = {auto:'precio_auto',moto:'precio_moto',pickup:'precio_pickup'}[vehicle.tipo_vehiculo];
+        const tarifa = Number(trato[column]);
+        if (!column||!Number.isFinite(tarifa)||tarifa<0) throw Object.assign(new Error('El trato no tiene una tarifa valida para el vehiculo.'), { statusCode: 409 });
+        const minutos=Math.round((new Date(entity.fecha_salida)-new Date(entity.fecha_entrada))/60000);
+        const importe=Number((tarifa*minutos/60).toFixed(2));
+        const snap={id_trato:trato.id,modalidad_pago_aplicada:trato.modalidad_pago,tipo_cupo:tipoCupo,responsable_pago:responsable,tarifa_hora_aplicada:tarifa,importe_estimado:importe,estado_reserva:responsable==='empresa'?'confirmada':'pendiente_pago',retencion_pago_hasta:responsable==='empresa'?null:new Date(Date.now()+600000)};
+        if (!insert) return {idTrato:trato.id,modalidadPago:trato.modalidad_pago,tipoCupo,responsablePago:responsable,tipoVehiculo:vehicle.tipo_vehiculo,tarifaHora:tarifa,minutos,importe,requierePago:responsable==='empleado'};
+        return (await client.query(
+            `INSERT INTO reservas
+                (id_usuario,id_garage,id_vehiculo,fecha_entrada,fecha_salida,entro,salio,dia,
+                 id_trato,modalidad_pago_aplicada,tipo_cupo,responsable_pago,
+                 tarifa_hora_aplicada,importe_estimado,estado_reserva,retencion_pago_hasta)
+             VALUES
+                ($1,$2,$3,$4,$5,false,false,$6,$7,$8,$9,$10,$11,$12,
+                 $13::estado_reserva_enum,$14)
+             RETURNING *`,
+            [
+                user.id,
+                entity.id_garage,
+                vehicle.id,
+                entity.fecha_entrada,
+                entity.fecha_salida,
+                entity.dia,
+                snap.id_trato,
+                snap.modalidad_pago_aplicada,
+                snap.tipo_cupo,
+                snap.responsable_pago,
+                snap.tarifa_hora_aplicada,
+                snap.importe_estimado,
+                snap.estado_reserva,
+                snap.retencion_pago_hasta,
+            ]
+        )).rows[0];
+    };
+
     getAllAsync = async (requestingUser = null) => {
         try {
             const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
@@ -102,6 +168,13 @@ export default class ReservaRepository {
                     r.salio,
                     r.dia,
                     r."Borrado",
+                    r.modalidad_pago_aplicada,
+                    r.tipo_cupo,
+                    r.responsable_pago,
+                    r.tarifa_hora_aplicada,
+                    r.importe_estimado,
+                    r.estado_reserva,
+                    r.retencion_pago_hasta,
                     g.nombre AS garage_nombre,
                     g.piso AS garage_piso,
                     g.ubicacion AS garage_ubicacion,

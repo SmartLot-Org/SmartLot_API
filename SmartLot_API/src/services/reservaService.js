@@ -30,7 +30,10 @@ export default class ReservaService {
         return reservas;
     }
 
-    getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
+    getByIdAsync = async (id, requestingUser = null) => {
+        await this.repo.expirePendingAsync(pool, id);
+        return this.repo.getByIdAsync(id, requestingUser);
+    };
 
     getActivasByUsuarioAsync = async (id_usuario) => await this.repo.getActivasByUsuarioAsync(id_usuario);
 
@@ -87,7 +90,13 @@ export default class ReservaService {
                 entro: r.entro,
                 salio: r.salio,
                 borrado,
-                estado,
+                estado: r.estado_reserva || estado,
+                modalidad_pago_aplicada: r.modalidad_pago_aplicada,
+                tipo_cupo: r.tipo_cupo,
+                responsable_pago: r.responsable_pago,
+                tarifa_hora_aplicada: r.tarifa_hora_aplicada,
+                importe_estimado: r.importe_estimado,
+                retencion_pago_hasta: r.retencion_pago_hasta,
                 vehiculo: r.patente
                     ? { patente: r.patente, marca: r.marca_nombre, modelo: r.modelo_nombre }
                     : null,
@@ -101,25 +110,16 @@ export default class ReservaService {
     }
 
     createAsync = async (entity, requestingUser) => {
-        const rol = Number(requestingUser.id_rol);
-        if (rol !== 1 && rol !== 4) {
-            entity.id_usuario = requestingUser.id;
-        }
+        entity = { ...entity, id_usuario: requestingUser.id };
 
         this._validarCamposObligatorios(entity);
-        await this._validarRelacionesAsync(entity, requestingUser);
         this._validarFechasAsync(entity);
-        await this._validarDisponibilidadAsync(entity);
-        await this._validarMaximoReservasDiariasAsync(entity);
-
-        entity.entro = false;
-        entity.salio = false;
 
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            const reserva = await this.repo.createWithClientAsync(entity, client);
+            const reserva = await this.repo.quoteAndCreateWithClientAsync(entity, client, true);
             if (!reserva) {
                 const error = new Error('Error interno al crear la reserva.');
                 error.statusCode = 500;
@@ -135,6 +135,22 @@ export default class ReservaService {
             client.release();
         }
     }
+
+    quoteAsync = async (entity, requestingUser) => {
+        entity = { ...entity, id_usuario: requestingUser.id };
+        this._validarCamposObligatorios(entity);
+        this._validarFechasAsync(entity);
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const quote = await this.repo.quoteAndCreateWithClientAsync(entity, client, false);
+            await client.query('ROLLBACK');
+            return quote;
+        } catch (error) {
+            try { await client.query('ROLLBACK'); } catch {}
+            throw error;
+        } finally { client.release(); }
+    };
 
     updateAsync = async (id, entity, requestingUser) => {
         const rol = Number(requestingUser.id_rol);
@@ -202,7 +218,6 @@ export default class ReservaService {
             error.statusCode = 404;
             throw error;
         }
-
         if (requestingUser) {
             const rol = Number(requestingUser.id_rol);
             if (rol !== 1 && rol !== 4 && Number(reserva.id_usuario) !== Number(requestingUser.id)) {
@@ -405,6 +420,11 @@ export default class ReservaService {
         if (!reserva) {
             const error = new Error(`La reserva con ID ${id} no existe.`);
             error.statusCode = 404;
+            throw error;
+        }
+        if (reserva.estado_reserva !== 'confirmada') {
+            const error = new Error('La reserva no esta confirmada para control de acceso.');
+            error.statusCode = 409;
             throw error;
         }
 
