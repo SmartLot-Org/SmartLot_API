@@ -1,5 +1,6 @@
 // solicitudEmpresaGarageService.js
 import SolicitudEmpresaGarageRepository from '../repositories/solicitudEmpresaGarageRepository.js';
+import TratoEmpresaGarageRepository from '../repositories/tratoEmpresaGarageRepository.js';
 import NotificacionService from '../services/NotificacionService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import pool from '../database/db.js';
@@ -221,5 +222,120 @@ export default class SolicitudEmpresaGarageService {
             console.error('Error al crear notificación de cancelación:', err);
         }
         return result;
+    };
+
+    createModificationAsync = async (input, usuario) => {
+        if (!hasRole(usuario, 1, ROLE_NAMES.ADMIN)) fail('Solo un administrador puede solicitar modificaciones.', 403);
+        const idEmpresa = Number(usuario?.id_empresa);
+        if (!Number.isInteger(idEmpresa) || idEmpresa <= 0) fail('El administrador no tiene una empresa válida.', 403);
+        const idTrato = Number(input.id_trato);
+        const nuevaCantidad = Number(input.cantidad_cocheras);
+        if (!Number.isInteger(idTrato) || idTrato <= 0) fail('id_trato debe ser un entero positivo.', 400);
+        if (!Number.isInteger(nuevaCantidad) || nuevaCantidad <= 0) fail('cantidad_cocheras debe ser un entero mayor que cero.', 400);
+
+        // Verificar que el trato existe y el admin tiene acceso
+        const tratoRepo = new TratoEmpresaGarageRepository();
+        const trato = await tratoRepo.getByIdAsync(idTrato);
+        if (!trato) fail('El trato no existe.', 404);
+        if (Number(trato.id_empresa) !== Number(idEmpresa)) fail('No tiene acceso a este trato.', 403);
+        if (usuario.id_sede && Number(usuario.id_sede) !== Number(trato.id_sede)) fail('No puede modificar tratos de otra sede.', 403);
+
+        // Verificar que no haya ya una solicitud de modificación pendiente para este trato
+        const existingPending = await this.repo.pool.query(
+            `SELECT id FROM solicitudes WHERE id_trato=$1 AND tipo_solicitud='modificacion' AND estado='pendiente' LIMIT 1`,
+            [idTrato]
+        );
+        if (existingPending.rows[0]) fail('Ya existe una solicitud de modificación pendiente para este trato.', 409);
+
+        const result = await this.repo.createPendingAsync({
+            id_sede: Number(trato.id_sede),
+            id_empresa_autorizada: idEmpresa,
+            id_garage: Number(trato.id_garage),
+            cantidad_cocheras: nuevaCantidad,
+            descripcion: input.descripcion || null,
+            tipo_solicitud: 'modificacion',
+            id_trato: idTrato,
+        });
+
+        // Notificar a los dueños del garage (best-effort)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(Number(trato.id_garage));
+            const usuariosGarage = await this._obtenerUsuariosGarage(Number(trato.id_garage));
+            const mensaje = `${actorNombre} solicita cambiar la cantidad de cocheras del trato con ${garageNombre} de ${trato.cantidad_cocheras} a ${nuevaCantidad} cocheras.`;
+            for (const usuarioGarage of usuariosGarage) {
+                await this.notificacionService.crearAsync(
+                    usuarioGarage.id,
+                    mensaje,
+                    'solicitud_modificacion',
+                    actorNombre,
+                    Number(trato.id_garage),
+                    result.id
+                );
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de modificación:', err);
+        }
+
+        return result;
+    };
+
+    acceptModificationAsync = async (id, usuario) => {
+        if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) fail('Solo el dueño del garage puede autorizar modificaciones.', 403);
+        const resultado = await this.repo.acceptModificationAsync(id, usuario.id);
+        const solicitud = resultado.solicitud;
+        // Notificar a los admins de la empresa (best-effort)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(solicitud.id_garage);
+            const sede = await pool.query('SELECT id, id_empresa FROM sedes WHERE id = $1', [solicitud.id_sede]);
+            const idEmpresa = sede.rows[0] ? sede.rows[0].id_empresa : null;
+            const idSede = sede.rows[0] ? sede.rows[0].id : null;
+            if (idEmpresa) {
+                const admins = await this._obtenerAdminsEmpresa(idSede, idEmpresa);
+                for (const admin of admins) {
+                    await this.notificacionService.crearAsync(
+                        admin.id,
+                        `${actorNombre} autorizó el cambio de cocheras del trato con ${garageNombre} a ${solicitud.cantidad_cocheras} cocheras.`,
+                        'modificacion_autorizada',
+                        actorNombre,
+                        solicitud.id_garage,
+                        solicitud.id
+                    );
+                }
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de modificación autorizada:', err);
+        }
+        return resultado;
+    };
+
+    rejectModificationAsync = async (id, usuario) => {
+        if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) fail('Solo el dueño del garage puede rechazar modificaciones.', 403);
+        const solicitud = await this.repo.rejectModificationAsync(id, usuario.id);
+        // Notificar a los admins de la empresa (best-effort)
+        try {
+            const actorNombre = await this._obtenerActorNombre(usuario.id);
+            const garageNombre = await this._obtenerNombreGarage(solicitud.id_garage);
+            const sede = await pool.query('SELECT id, id_empresa FROM sedes WHERE id = $1', [solicitud.id_sede]);
+            const idEmpresa = sede.rows[0] ? sede.rows[0].id_empresa : null;
+            const idSede = sede.rows[0] ? sede.rows[0].id : null;
+            if (idEmpresa) {
+                const admins = await this._obtenerAdminsEmpresa(idSede, idEmpresa);
+                for (const admin of admins) {
+                    await this.notificacionService.crearAsync(
+                        admin.id,
+                        `${actorNombre} rechazó el cambio de cocheras solicitado para ${garageNombre}.`,
+                        'modificacion_rechazada',
+                        actorNombre,
+                        solicitud.id_garage,
+                        solicitud.id
+                    );
+                }
+            }
+        } catch (err) {
+            console.error('Error al crear notificación de modificación rechazada:', err);
+        }
+        return solicitud;
     };
 }

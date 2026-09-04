@@ -33,6 +33,14 @@ router.patch('/:id/rechazar', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, 
     res.status(200).json(await svc.rejectAsync(parseId(req.params.id), req.usuario));
 });
 
+router.patch('/:id/autorizar-modificacion', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+    res.status(200).json(await svc.acceptModificationAsync(parseId(req.params.id), req.usuario));
+});
+
+router.patch('/:id/rechazar-modificacion', requireRole(ROLE_NAMES.DUENO_GARAGE), async (req, res) => {
+    res.status(200).json(await svc.rejectModificationAsync(parseId(req.params.id), req.usuario));
+});
+
 router.patch('/:id/cancelar', requireRole(1, ROLE_NAMES.ADMIN), async (req, res) => {
     res.status(200).json(await svc.cancelAsync(parseId(req.params.id), req.usuario));
 });
