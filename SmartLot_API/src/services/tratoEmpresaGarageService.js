@@ -3,6 +3,7 @@ import TratoEmpresaGarageRepository from '../repositories/tratoEmpresaGarageRepo
 import GarageService from './garageService.js';
 import SedeService from './sedeService.js';
 import UsuarioGarageService from './usuarioGarageService.js';
+import SolicitudEmpresaGarageService from './solicitudEmpresaGarageService.js';
 import NotificacionService from '../services/NotificacionService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import pool from '../database/db.js';
@@ -19,6 +20,7 @@ export default class TratoEmpresaGarageService {
         this.sedeService = new SedeService();
         this.usuarioGarageService = new UsuarioGarageService();
         this.notificacionService = new NotificacionService();
+        this.solicitudService = new SolicitudEmpresaGarageService();
     }
 
     _obtenerActorNombre = async (actorId) => {
@@ -96,27 +98,32 @@ export default class TratoEmpresaGarageService {
         const current = await this.getByIdAsync(id, usuario);
         if (!this._adminCanManage(usuario, current)) fail('No puede modificar este trato.', 403);
         const cantidad = Number(changes.cantidad_cocheras);
-        if (!Number.isInteger(cantidad) || cantidad <= 0) fail('cantidad_cocheras debe ser un entero mayor que 0.', 400);
-        const updated = await this.repo.updateQuantityAsync(id, cantidad);
-        // Notificar a los dueños del garage (best-effort, try/catch)
-        try {
-            const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';
-            const actorNombre = await this._obtenerActorNombre(usuario.id);
-            const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
-            const mensaje = `El ${rol} ${actorNombre} modificó su trato con el garage ${current.garage_nombre} (ahora ${cantidad} cocheras).`;
-            for (const usuarioGarage of usuariosGarage) {
-                await this.notificacionService.crearAsync(
-                    usuarioGarage.id,
-                    mensaje,
-                    'trato_modificado',
-                    actorNombre,
-                    current.id_garage
-                );
-            }
-        } catch (err) {
-            console.error('Error al crear notificación de actualización de trato:', err);
+        if (!Number.isInteger(cantidad) || cantidad <= 0) fail('cantidad_cocheras debe un entero mayor que 0.', 400);
+
+        // Superadmin: actualiza directamente (comportamiento original)
+        if (hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) {
+            const updated = await this.repo.updateQuantityAsync(id, cantidad);
+            try {
+                const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';
+                const actorNombre = await this._obtenerActorNombre(usuario.id);
+                const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
+                const mensaje = `El ${rol} ${actorNombre} modificó su trato con el garage ${current.garage_nombre} (ahora ${cantidad} cocheras).`;
+                for (const usuarioGarage of usuariosGarage) {
+                    await this.notificacionService.crearAsync(
+                        usuarioGarage.id, mensaje, 'trato_modificado', actorNombre, current.id_garage
+                    );
+                }
+            } catch (err) { console.error('Error al crear notificación de actualización de trato:', err); }
+            return updated;
         }
-        return updated;
+
+        // Admin: crea solicitud de modificación (espera autorización del dueño)
+        const solicitud = await this.solicitudService.createModificationAsync({
+            id_trato: id,
+            cantidad_cocheras: cantidad,
+            descripcion: changes.descripcion || null,
+        }, usuario);
+        return { ...solicitud, tipo: 'solicitud_modificacion' };
     };
     updatePaymentModalityAsync = async (id, modalidad, usuario) => {
         if (!PAYMENT_MODALITIES.has(modalidad)) fail('modalidadPago no es valida.', 400);
