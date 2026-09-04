@@ -45,7 +45,32 @@ export default class ReservaRepository {
         const importe=Number((tarifa*minutos/60).toFixed(2));
         const snap={id_trato:trato.id,modalidad_pago_aplicada:trato.modalidad_pago,tipo_cupo:tipoCupo,responsable_pago:responsable,tarifa_hora_aplicada:tarifa,importe_estimado:importe,estado_reserva:responsable==='empresa'?'confirmada':'pendiente_pago',retencion_pago_hasta:responsable==='empresa'?null:new Date(Date.now()+600000)};
         if (!insert) return {idTrato:trato.id,modalidadPago:trato.modalidad_pago,tipoCupo,responsablePago:responsable,tipoVehiculo:vehicle.tipo_vehiculo,tarifaHora:tarifa,minutos,importe,requierePago:responsable==='empleado'};
-        return (await client.query(`INSERT INTO reservas (id_usuario,id_garage,id_vehiculo,fecha_entrada,fecha_salida,entro,salio,dia,id_trato,modalidad_pago_aplicada,tipo_cupo,responsable_pago,tarifa_hora_aplicada,importe_estimado,estado_reserva,retencion_pago_hasta) VALUES ($1,$2,$3,$4,$5,false,false,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $13='pendiente_pago' THEN NOW()+INTERVAL '10 minutes' ELSE NULL END) RETURNING *`,[user.id,entity.id_garage,vehicle.id,entity.fecha_entrada,entity.fecha_salida,entity.dia,snap.id_trato,snap.modalidad_pago_aplicada,snap.tipo_cupo,snap.responsable_pago,snap.tarifa_hora_aplicada,snap.importe_estimado,snap.estado_reserva])).rows[0];
+        return (await client.query(
+            `INSERT INTO reservas
+                (id_usuario,id_garage,id_vehiculo,fecha_entrada,fecha_salida,entro,salio,dia,
+                 id_trato,modalidad_pago_aplicada,tipo_cupo,responsable_pago,
+                 tarifa_hora_aplicada,importe_estimado,estado_reserva,retencion_pago_hasta)
+             VALUES
+                ($1,$2,$3,$4,$5,false,false,$6,$7,$8,$9,$10,$11,$12,
+                 $13::estado_reserva_enum,$14)
+             RETURNING *`,
+            [
+                user.id,
+                entity.id_garage,
+                vehicle.id,
+                entity.fecha_entrada,
+                entity.fecha_salida,
+                entity.dia,
+                snap.id_trato,
+                snap.modalidad_pago_aplicada,
+                snap.tipo_cupo,
+                snap.responsable_pago,
+                snap.tarifa_hora_aplicada,
+                snap.importe_estimado,
+                snap.estado_reserva,
+                snap.retencion_pago_hasta,
+            ]
+        )).rows[0];
     };
 
     getAllAsync = async (requestingUser = null) => {
