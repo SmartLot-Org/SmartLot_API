@@ -32,6 +32,63 @@ async function savePaymentRecord(paymentData, idEmpresa = null) {
     metadata
   } = paymentData;
 
+  // Intentar actualizar la fila de preferencia existente (mp_payment_id IS NULL) para preservar metadata.consumos_ids
+  // Esto evita duplicar filas: preferencia (sin payment_id) -> pago (con payment_id) y mantiene vinculación con consumos
+  if (mpPreferenceId || orderId) {
+    try {
+      const prefRes = await pool.query(
+        `SELECT id, metadata, mp_payment_id, mp_preference_id, id_orden_externa FROM pagos WHERE (mp_preference_id = $1 OR id_orden_externa = $2) AND mp_payment_id IS NULL LIMIT 1`,
+        [mpPreferenceId || null, orderId || null]
+      );
+      // Solo actualizar una preferencia que realmente tenga preference_id.
+      // Además de ser más seguro, conserva el fallback por payment_id para
+      // registros legacy que no fueron creados desde /preference.
+      if (prefRes.rows.length > 0 && prefRes.rows[0].mp_preference_id) {
+        const existing = prefRes.rows[0];
+        let existingMeta = existing.metadata;
+        if (typeof existingMeta === 'string') {
+          try { existingMeta = JSON.parse(existingMeta); } catch { existingMeta = {}; }
+        }
+        if (!existingMeta || typeof existingMeta !== 'object') existingMeta = {};
+        // Merge: conservar consumos_ids y datos de la preferencia, añadir datos del pago de MP
+        const mergedMeta = { ...existingMeta, ...paymentData, _mp_payment: paymentData };
+        // Si la preferencia ya tenía consumos_ids, asegurar que se preserva
+        if (existingMeta.consumos_ids && !mergedMeta.consumos_ids) mergedMeta.consumos_ids = existingMeta.consumos_ids;
+        if (existingMeta.items && !mergedMeta.items) mergedMeta.items = existingMeta.items;
+
+        const upd = await pool.query(
+          `UPDATE pagos SET
+             mp_payment_id = $1,
+             mp_payment_status = $2,
+             mp_payment_type = $3,
+             monto = COALESCE($4, monto),
+             moneda = COALESCE($5, moneda),
+             descripcion = COALESCE($6, descripcion),
+             fecha_aprobacion = COALESCE($7, fecha_aprobacion),
+             metadata = $8,
+             fecha_actualizacion = NOW()
+           WHERE id = $9
+           RETURNING *`,
+          [
+            mpPaymentId,
+            mpPaymentStatus,
+            mpPaymentType,
+            monto ?? null,
+            moneda ?? null,
+            descripcion ?? null,
+            fechaAprobacion ? new Date(fechaAprobacion) : null,
+            JSON.stringify(mergedMeta),
+            existing.id
+          ]
+        );
+        if (upd.rows[0]) return upd.rows[0];
+      }
+    } catch (e) {
+      console.warn('[MP] savePaymentRecord pref update failed:', e.message);
+    }
+  }
+
+  // Fallback: upsert por mp_payment_id (preservando metadata existente si ya había un pago)
   const query = `
     INSERT INTO pagos (
       id_reserva,
@@ -51,7 +108,7 @@ async function savePaymentRecord(paymentData, idEmpresa = null) {
       mp_payment_status = EXCLUDED.mp_payment_status,
       mp_payment_type = EXCLUDED.mp_payment_type,
       fecha_aprobacion = EXCLUDED.fecha_aprobacion,
-      metadata = EXCLUDED.metadata,
+      metadata = COALESCE(pagos.metadata, '{}'::jsonb) || EXCLUDED.metadata::jsonb,
       fecha_actualizacion = NOW()
     RETURNING *
   `;
@@ -116,7 +173,7 @@ async function markWebhookProcessed(mpEventId, error = null) {
 
 router.post('/preference', async (req, res, next) => {
   try {
-    const { items, orderId, backUrls } = req.body;
+    let { items, orderId, backUrls, metadata, consumosIds, periodo, idGarage, idSede } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       throwError('Items array is required', 400);
@@ -126,7 +183,34 @@ router.post('/preference', async (req, res, next) => {
       throwError('orderId is required', 400);
     }
 
+    // Cap sandbox a $0.10 máximo para permitir múltiples testeos con saldo chico
+    // Aplica a pagos de admin (ADMIN-PAGO) o si MP_SANDBOX=true
+    const esPagoAdmin = String(orderId).startsWith('ADMIN-PAGO-');
+    const sandboxMode = isSandbox() || esPagoAdmin;
+    if (sandboxMode) {
+      const MAX_TEST = 0.10;
+      items = items.map((it) => ({
+        ...it,
+        unit_price: Math.min(Number(it.unit_price ?? it.monto ?? 0), MAX_TEST),
+      }));
+      // Si tras cap el monto es 0, forzar 0.10 para que MP no rechace monto 0
+      for (const it of items) {
+        if (!(Number(it.unit_price) > 0)) it.unit_price = MAX_TEST;
+      }
+    }
+
     const preference = await createPreference(items, orderId, backUrls);
+
+    // Metadata extendida para vincular con consumos_reserva (para marcar PAGADA)
+    const extraMeta = {};
+    if (metadata && typeof metadata === 'object') Object.assign(extraMeta, metadata);
+    if (consumosIds) extraMeta.consumos_ids = consumosIds;
+    else if (metadata?.consumos_ids) extraMeta.consumos_ids = metadata.consumos_ids;
+    if (periodo) extraMeta.periodo = periodo;
+    if (idGarage) extraMeta.id_garage = idGarage;
+    if (idSede) extraMeta.id_sede = idSede;
+    // Si items trae consumos_ids en descripción, propagar
+    const metadataToStore = { items, orderId, ...extraMeta };
 
     await pool.query(
       `INSERT INTO pagos (id_orden_externa, mp_preference_id, monto, moneda, descripcion, id_empresa, metadata)
@@ -139,7 +223,7 @@ router.post('/preference', async (req, res, next) => {
         'ARS',
         `Reserva ${orderId}`,
         req.usuario?.id_empresa || null,
-        JSON.stringify({ items, orderId })
+        JSON.stringify(metadataToStore)
       ]
     );
 

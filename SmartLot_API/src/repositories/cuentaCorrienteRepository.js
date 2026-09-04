@@ -62,18 +62,37 @@ export default class CuentaCorrienteRepository {
                     c.fecha_inicio, c.fecha_fin, c.tipo_vehiculo::text AS tipo_vehiculo,
                     c.minutos_facturados, c.tarifa_hora_aplicada, c.importe_generado
                FROM consumos_reserva c
-               JOIN garages g ON g.id = c.id_garage
-               JOIN sedes s ON s.id = c.id_sede
-              WHERE c.id_empresa = $1
-                AND ($2::integer IS NULL OR c.id_sede = $2)
-                AND ($3::text IS NULL OR c.fecha_inicio >= ($3 || '-01')::date
-                     AND c.fecha_inicio < (($3 || '-01')::date + INTERVAL '1 month'))
-                AND ($4::text IS NULL OR g.nombre ILIKE '%' || $4 || '%'
-                     OR s.nombre ILIKE '%' || $4 || '%')
-              ORDER BY c.fecha_inicio DESC, c.id DESC`,
+                JOIN garages g ON g.id = c.id_garage
+                JOIN sedes s ON s.id = c.id_sede
+               WHERE c.id_empresa = $1
+                 AND ($2::integer IS NULL OR c.id_sede = $2)
+                 AND ($3::text IS NULL OR c.fecha_inicio >= ($3 || '-01')::date
+                      AND c.fecha_inicio < (($3 || '-01')::date + INTERVAL '1 month'))
+                 AND ($4::text IS NULL OR g.nombre ILIKE '%' || $4 || '%'
+                      OR s.nombre ILIKE '%' || $4 || '%')
+               ORDER BY c.fecha_inicio DESC, c.id DESC`,
             [idEmpresa, idSede, periodo, search]
         );
         return result.rows;
+    };
+
+    getPagosAprobadosPorEmpresaAsync = async (idEmpresa) => {
+        // Trae pagos approved para marcar consumos como PAGADA
+        // Incluye id_reserva directo y metadata.consumos_ids para pagos de grupo
+        try {
+            const result = await pool.query(
+                `SELECT id, id_reserva, id_orden_externa, mp_payment_id, mp_payment_status, monto, metadata
+                   FROM pagos
+                  WHERE id_empresa = $1
+                    AND mp_payment_status = 'approved'`,
+                [idEmpresa]
+            );
+            return result.rows;
+        } catch (e) {
+            // Si tabla pagos no existe aún, retornar vacío sin romper cuentas corrientes
+            if (e.code === '42P01') return [];
+            throw e;
+        }
     };
 
     getDuenoAsync = async ({ idUsuario, idGarage = null, periodo = null, search = null }) => {

@@ -38,6 +38,54 @@ export default class CuentaCorrienteService {
         if (search && search.length > 100) fail('search no puede superar 100 caracteres.', 400);
 
         const rows = await this.repo.getAdminAsync({ idEmpresa, idSede, periodo, search });
+
+        // Obtener pagos aprobados para determinar estado PAGADA/PENDIENTE
+        // Se vincula por id_reserva directo y por metadata.consumos_ids (pagos de grupo) y por id_orden_externa pattern ADMIN-PAGO-periodo-G*-S*
+        let pagosAprobados = [];
+        try {
+            pagosAprobados = await this.repo.getPagosAprobadosPorEmpresaAsync(idEmpresa);
+        } catch {}
+
+        const reservaPagadaSet = new Set();
+        const consumoPagadoSet = new Set();
+        const grupoPagadoSet = new Set(); // key = periodo:Gx:Sx
+
+        for (const p of pagosAprobados) {
+            if (p.id_reserva) reservaPagadaSet.add(Number(p.id_reserva));
+            // metadata puede venir como string o objeto según driver
+            let meta = p.metadata;
+            if (typeof meta === 'string') {
+                try { meta = JSON.parse(meta); } catch { meta = {}; }
+            }
+            if (meta && Array.isArray(meta.consumos_ids)) {
+                for (const cid of meta.consumos_ids) consumoPagadoSet.add(Number(cid));
+            }
+            // También considerar pagos que fueron stringificados completos desde MP (metadata contiene paymentData)
+            // Por compatibilidad, si el metadata interno tiene consumos_ids anidado
+            if (meta && meta.consumos_ids) {
+                const arr = Array.isArray(meta.consumos_ids) ? meta.consumos_ids : [];
+                for (const cid of arr) consumoPagadoSet.add(Number(cid));
+            }
+            // Detectar pagos de grupo por id_orden_externa: ADMIN-PAGO-YYYY-MM-Gx-Sx-*
+            if (p.id_orden_externa && p.id_orden_externa.startsWith('ADMIN-PAGO-')) {
+                // formato: ADMIN-PAGO-2025-08-G3-S2-...  -> extraer periodo y G/S
+                const m = String(p.id_orden_externa).match(/ADMIN-PAGO-(\d{4}-\d{2})-G(\d+)-S(\d+)/);
+                if (m) {
+                    const [, per, g, s] = m;
+                    grupoPagadoSet.add(`${g}:${s}:${per}`);
+                }
+                // También soportar formato legacy: ADMIN-PAGO-YYYY-MM-Gx-Sy-TEST-xxxx
+            }
+        }
+
+        const isConsumoPagado = (row) => {
+            if (reservaPagadaSet.has(Number(row.id_reserva))) return true;
+            if (consumoPagadoSet.has(Number(row.id))) return true;
+            const gkey = `${row.id_garage}:${row.id_sede}:${row.periodo}`;
+            if (grupoPagadoSet.has(gkey)) return true;
+            return false;
+        };
+
         const groups = new Map();
         for (const row of rows) {
             const key = `${row.id_garage}:${row.id_sede}:${row.periodo}`;
@@ -52,6 +100,7 @@ export default class CuentaCorrienteService {
                     minutosTotales: 0,
                     importeGenerado: 0,
                     movimientos: [],
+                    _pagados: 0,
                 });
             }
             const group = groups.get(key);
@@ -59,6 +108,8 @@ export default class CuentaCorrienteService {
             group.reservasUtilizadas += 1;
             group.minutosTotales += Number(row.minutos_facturados);
             group.importeGenerado = money(group.importeGenerado + importe);
+            const pagado = isConsumoPagado(row);
+            if (pagado) group._pagados += 1;
             group.movimientos.push({
                 idConsumo: Number(row.id),
                 idReserva: row.id_reserva,
@@ -70,10 +121,15 @@ export default class CuentaCorrienteService {
                 minutosUtilizados: Number(row.minutos_facturados),
                 tarifaHoraAplicada: money(row.tarifa_hora_aplicada),
                 importeGenerado: importe,
+                pagado,
             });
         }
 
-        const items = [...groups.values()];
+        const items = [...groups.values()].map((g) => {
+            const estadoPago = g._pagados === g.reservasUtilizadas && g.reservasUtilizadas > 0 ? 'PAGADA' : 'PENDIENTE';
+            const { _pagados, ...rest } = g;
+            return { ...rest, estadoPago, pagados: _pagados };
+        });
         const summary = items.reduce((acc, item) => ({
             reservasUtilizadas: acc.reservasUtilizadas + item.reservasUtilizadas,
             minutosTotales: acc.minutosTotales + item.minutosTotales,
