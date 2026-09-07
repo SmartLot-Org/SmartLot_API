@@ -307,6 +307,16 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
 
         await this._aplicarReglasDeActualizacion(entity, requestingUser, id);
 
+        // Aislamiento de tenant: un admin no puede mover usuarios a sedes de otra empresa.
+        if (Number(requestingUser.id_rol) === 1 && entity.id_sede) {
+            const sedeTenant = await this.sedeService.getByIdAsync(entity.id_sede, requestingUser);
+            if (!sedeTenant) {
+                const error = new Error('La sede indicada no pertenece a tu organización.');
+                error.statusCode = 403;
+                throw error;
+            }
+        }
+
         // Merge: preservar valores actuales para campos no enviados
         const merged = { ...current, ...entity };
 
@@ -629,14 +639,34 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
             throw error;
         }
 
+        // Aislamiento de tenant: un admin no puede modificar usuarios de otra empresa
+        // (evita toma de cuentas y escalada cross-tenant via email/contraseña/rol).
+        if (esAdmin && !esPropio) {
+            const target = await this.repo.getByIdAsync(targetId);
+            if (!target) {
+                const error = new Error(`El usuario con ID ${targetId} no existe.`);
+                error.statusCode = 404;
+                throw error;
+            }
+            if (Number(target.id_empresa) !== Number(requestingUser.id_empresa)) {
+                const error = new Error('No tiene permisos para modificar usuarios de otra empresa.');
+                error.statusCode = 403;
+                throw error;
+            }
+        }
+
         if (esPropio) {
+            // Ningun usuario puede autoasignarse privilegios ni contexto de tenant.
             delete entity.id_rol;
+            delete entity.id_sede;
+            delete entity.id_empresa;
+            delete entity.activo;
         }
 
         if (!esPropio && esAdmin && entity.id_rol !== undefined) {
             const targetRol = await this.rolService.getByIdAsync(entity.id_rol);
             const tipo = targetRol?.tipo_rol?.toLowerCase();
-            if (!['admin', 'cliente', 'empleado', 'garagista', 'dueño_garage'].includes(tipo)) {
+            if (!['cliente', 'empleado', 'garagista'].includes(tipo)) {
                 const error = new Error('No puede asignar el rol indicado.');
                 error.statusCode = 400;
                 throw error;

@@ -281,7 +281,36 @@ router.get('/:id', authMiddleware, async (req, res) => {
     res.status(200).json(data);
 });
 
-// CREATE (POST) - admin o smartlot
+// REGISTRO PUBLICO (sin autenticacion) - crea cuentas de rol cliente/empleado (2)
+// El rol y los campos de tenant SIEMPRE los decide el servidor, nunca el cliente.
+router.post('/register', authRateLimiter, async (req, res) => {
+    const { nombre, apellido, email, contraseña } = req.body || {};
+    if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
+    if (!isValidString(apellido)) throwError('El apellido es requerido.', 400);
+    if (!isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
+    if (!isValidPassword(contraseña)) throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
+
+    const rolCliente = await svc.rolService.getByIdAsync(2);
+    if (!rolCliente || !['cliente', 'empleado'].includes(String(rolCliente.tipo_rol || '').toLowerCase())) {
+        throwError('Error de configuración: el rol público de registro no está disponible.', 500);
+    }
+
+    const data = await svc.createAsync({
+        id_rol: 2,
+        nombre: String(nombre).trim(),
+        apellido: String(apellido).trim(),
+        email: String(email).trim().toLowerCase(),
+        contraseña,
+        id_sede: null,
+        id_empresa: null,
+        activo: true
+    });
+    if (!data) throwError('Error interno al crear el usuario.', 500);
+    const { contraseña: _hash, ...usuarioSinContraseña } = data;
+    res.status(201).json(usuarioSinContraseña);
+});
+
+// CREATE (POST) - admin o superadmin
 router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     const { id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, id_garage, activo } = req.body;
     if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
@@ -296,6 +325,12 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     const esDuenoGarage = tipoRol === 'dueño_garage';
     const esSuperadmin = tipoRol === 'superadmin' || Number(id_rol) === 4;
     const esAdmin = tipoRol === 'admin' || Number(id_rol) === 1;
+
+    // Escalada de privilegios: solo superadmin puede crear admins, superadmins o dueños de garage.
+    const esRequesterSuperadmin = Number(req.usuario.id_rol) === 4;
+    if (!esRequesterSuperadmin && (esSuperadmin || esAdmin || esDuenoGarage)) {
+        throwError('No tiene permisos para crear usuarios con ese rol.', 403);
+    }
 
     if (esGaragista) {
         if (id_sede !== undefined && id_sede !== null && !isValidId(id_sede)) {
@@ -328,9 +363,26 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     if (id_empresa === '' || id_empresa === undefined || id_empresa === null) req.body.id_empresa = null;
     if (id_garage === '' || id_garage === undefined || id_garage === null) req.body.id_garage = null;
 
+    // Aislamiento de tenant: un admin solo puede crear usuarios dentro de su empresa
+    // (se fuerza id_empresa y se valida que sede/garage le pertenezcan, sin importar lo que envie el cliente).
+    const esRequesterAdmin = Number(req.usuario.id_rol) === 1;
+    if (esRequesterAdmin) {
+        if (!isValidId(req.usuario.id_empresa)) throwError('Tu usuario no tiene una empresa asociada.', 403);
+        req.body.id_empresa = req.usuario.id_empresa;
+        if (req.body.id_sede) {
+            const sede = await svc.sedeService.getByIdAsync(req.body.id_sede, req.usuario);
+            if (!sede) throwError('La sede indicada no pertenece a tu organización.', 403);
+        }
+        if (req.body.id_garage) {
+            const garage = await svc.garageService.getByIdAsync(req.body.id_garage, req.usuario);
+            if (!garage) throwError('El garage indicado no pertenece a tu organización.', 403);
+        }
+    }
+
     const data = await svc.createAsync(req.body);
     if (!data) throwError('Error interno al crear el usuario.', 500);
-    res.status(201).json(data);
+    const { contraseña: hashCreado, ...usuarioCreado } = data;
+    res.status(201).json(usuarioCreado);
 });
 
 // UPDATE (PUT) - admin, smartlot o el propio usuario
