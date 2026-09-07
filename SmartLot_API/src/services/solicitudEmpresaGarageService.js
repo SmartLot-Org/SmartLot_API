@@ -256,6 +256,7 @@ export default class SolicitudEmpresaGarageService {
             id_garage: Number(trato.id_garage),
             cantidad_cocheras: nuevaCantidad,
             descripcion: input.descripcion || null,
+            modalidad_pago: trato.modalidad_pago,
             tipo_solicitud: 'modificacion',
             id_trato: idTrato,
         });

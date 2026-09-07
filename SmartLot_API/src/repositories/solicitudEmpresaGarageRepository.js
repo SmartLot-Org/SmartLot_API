@@ -57,7 +57,8 @@ export default class SolicitudEmpresaGarageRepository {
                   LIMIT 1`, [entity.id_sede, entity.id_garage, ESTADOS_SOLICITUD.PENDIENTE]
             )).rows[0];
             if (pending) fail('Ya existe una solicitud pendiente para esa sede y garage.', 409);
-            const comprometidas = await this.tratoRepo.sumCantidadByGarageWithClientAsync(entity.id_garage, client);
+            const excludeId = entity.tipo_solicitud === 'modificacion' ? entity.id_trato : null;
+            const comprometidas = await this.tratoRepo.sumCantidadByGarageWithClientAsync(entity.id_garage, client, excludeId);
             if (entity.cantidad_cocheras > Number(garage.capacidad) - comprometidas) {
                 fail('La cantidad solicitada supera las cocheras disponibles.', 409);
             }
