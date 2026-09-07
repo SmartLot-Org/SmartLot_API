@@ -32,7 +32,11 @@ export default class ReservaRepository {
         if (!garage || garage.estado === false) throw Object.assign(new Error('El garage no existe o no esta activo.'), { statusCode: 404 });
         const trato = (await client.query(`SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 FOR UPDATE`, [user.id_sede,entity.id_garage])).rows[0];
         if (!trato) throw Object.assign(new Error('No existe un trato activo para la sede y el garage.'), { statusCode: 409 });
-        const active = `COALESCE("Borrado",false)=false AND (estado_reserva='confirmada' OR (estado_reserva='pendiente_pago' AND retencion_pago_hasta>NOW())) AND fecha_entrada<$2::timestamptz AND fecha_salida>$1::timestamptz`;
+        // Las columnas fecha_entrada/fecha_salida son timestamp SIN zona horaria
+        // y guardan hora local de Argentina. Comparar naive-vs-naive (los casts
+        // ::timestamptz promueven el naive usando el timezone de la sesion de
+        // Supabase (UTC) y corrian los solapes 3 horas).
+        const active = `COALESCE("Borrado",false)=false AND (estado_reserva='confirmada' OR (estado_reserva='pendiente_pago' AND retencion_pago_hasta>NOW())) AND fecha_entrada<$2::timestamp AND fecha_salida>$1::timestamp`;
         if ((await client.query(`SELECT 1 FROM reservas WHERE (id_usuario=$3 OR id_vehiculo=$4) AND ${active} LIMIT 1`, [entity.fecha_entrada,entity.fecha_salida,user.id,vehicle.id])).rowCount) throw Object.assign(new Error('El empleado o vehiculo ya tiene una reserva en ese intervalo.'), { statusCode: 409 });
         const counts = (await client.query(`SELECT COUNT(*) FILTER (WHERE id_trato=$4)::int trato,COUNT(*)::int garage FROM reservas WHERE id_garage=$3 AND ${active}`, [entity.fecha_entrada,entity.fecha_salida,entity.id_garage,trato.id])).rows[0];
         if (Number(counts.garage)>=Number(garage.capacidad)) throw Object.assign(new Error('El garage no tiene capacidad general disponible.'), { statusCode: 409 });

@@ -1,4 +1,6 @@
 import 'dotenv/config'
+// Debe evaluarse antes que cualquier modulo que cree fechas (ver comentario interno)
+import './config/timezone.js';
 import express 	from "express";
 import cors 	from "cors";
 import helmet from 'helmet';
