@@ -36,10 +36,10 @@ export default class TratoEmpresaGarageRepository {
         return result.rows[0] ?? null;
     };
 
-    sumCantidadByGarageWithClientAsync = async (idGarage, client) => {
+    sumCantidadByGarageWithClientAsync = async (idGarage, client, excludeId = null) => {
         const result = await client.query(
-            'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1',
-            [idGarage]
+            'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND ($2::int IS NULL OR id<>$2)',
+            [idGarage, excludeId]
         );
         return Number(result.rows[0]?.total ?? 0);
     };
