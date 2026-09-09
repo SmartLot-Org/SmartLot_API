@@ -160,7 +160,7 @@ router.post('', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), 
         nombre, piso, ubicacion, latitud, longitud,
         capacidad, capacidad_reservas, capacidad_para_no_reservas, estado, hora_apertura, hora_cierre, dias, precio_pickup, precio_auto, precio_moto
     };
-    const data = await svc.createAsync(safeEntity, req.usuario);
+    const data = await svc.createAsync({ ...safeEntity, id_dueno: req.body.id_dueno, id_garagistas: req.body.id_garagistas }, req.usuario);
     if (!data) throwError('Error interno al crear el garage.', 500);
     res.status(201).json(data);
 });
