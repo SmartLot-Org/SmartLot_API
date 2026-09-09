@@ -59,6 +59,21 @@ export default class EmpresaRepository {
         } catch (error) { console.error(error); return null; }
     }
 
+    createWithClientAsync = async (entity, client) => {
+        try {
+            const result = await client.query(
+                'INSERT INTO empresas (nombre, descripcion) VALUES ($1, $2) RETURNING *',
+                [entity.nombre, entity.descripcion]
+            );
+            return result.rows[0];
+        } catch (error) {
+            console.error(error);
+            const err = new Error('Error al crear la empresa en la base de datos.');
+            err.statusCode = 500;
+            throw err;
+        }
+    }
+
     updateAsync = async (id, entity, updatedBy = null) => {
         try {
             const result = await pool.query(

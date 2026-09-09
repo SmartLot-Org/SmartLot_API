@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import UsuarioService from './../services/usuarioService.js';
-import { isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone } from '../helpers/validatorHelper.js';
+import { isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone, isValidStrongPassword } from '../helpers/validatorHelper.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import { requireRole, requireRoleOrSelf } from '../middlewares/rolesMiddleware.js';
 import authRateLimiter from '../middlewares/rateLimiterMiddleware.js';
@@ -308,6 +308,66 @@ router.post('/register', authRateLimiter, async (req, res) => {
     if (!data) throwError('Error interno al crear el usuario.', 500);
     const { contraseña: _hash, ...usuarioSinContraseña } = data;
     res.status(201).json(usuarioSinContraseña);
+});
+
+// REGISTRO PUBLICO DE DUEÑO DE GARAGE (sin autenticacion) - crea la cuenta e inicia sesión.
+// El rol y los campos de tenant SIEMPRE los decide el servidor, nunca el cliente.
+router.post('/register-dueno-garage', authRateLimiter, async (req, res) => {
+    const { nombre, apellido, email, telefono, contraseña } = req.body || {};
+    if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
+    if (!isValidString(apellido)) throwError('El apellido es requerido.', 400);
+    if (!isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
+    const telefonoNormalizado = telefono === undefined || telefono === null || String(telefono).trim() === ''
+        ? null
+        : String(telefono).trim();
+    if (telefonoNormalizado !== null && !isValidPhone(telefonoNormalizado)) {
+        throwError('El teléfono debe contener solo dígitos (mínimo 7).', 400);
+    }
+    if (!isValidStrongPassword(contraseña)) {
+        throwError('La contraseña debe tener al menos 8 caracteres, 2 mayúsculas, 2 números y 2 caracteres especiales.', 400);
+    }
+
+    const rolDueno = await svc.rolService.getByIdAsync(5);
+    if (!rolDueno || String(rolDueno.tipo_rol || '').toLowerCase() !== 'dueño_garage') {
+        throwError('Error de configuración: el rol público de registro no está disponible.', 500);
+    }
+
+    const data = await svc.createAsync({
+        id_rol: 5,
+        nombre: String(nombre).trim(),
+        apellido: String(apellido).trim(),
+        email: String(email).trim().toLowerCase(),
+        telefono: telefonoNormalizado,
+        contraseña,
+        id_sede: null,
+        id_empresa: null,
+        activo: true
+    });
+    if (!data) throwError('Error interno al crear el usuario.', 500);
+
+    const login = await svc.loginAsync({ email: String(email).trim().toLowerCase(), contraseña });
+
+    res.cookie('access_token', login.access_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000
+    });
+
+    res.cookie('refresh_session_id', login.refresh_session_id, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/api/usuario/refresh',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+    });
+
+    res.status(201).json({
+        usuario: login.usuario,
+        access_token: login.access_token,
+        token_type: 'Bearer',
+        expires_in: '15m'
+    });
 });
 
 // CREATE (POST) - admin o superadmin

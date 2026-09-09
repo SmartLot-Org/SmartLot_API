@@ -34,6 +34,19 @@ export const isValidPassword = (password) => {
 };
 
 /**
+ * Valida si la contraseña cumple la política reforzada del registro público:
+ * al menos 8 caracteres, 2 mayúsculas, 2 números y 2 caracteres especiales
+ * (mismo criterio que el alta interna de usuarios).
+ */
+export const isValidStrongPassword = (password) => {
+    if (typeof password !== 'string' || password.length < 8) return false;
+    const especiales = (password.match(/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/g) || []).length;
+    const numeros = (password.match(/\d/g) || []).length;
+    const mayusculas = (password.match(/[A-Z]/g) || []).length;
+    return especiales >= 2 && numeros >= 2 && mayusculas >= 2;
+};
+
+/**
  * Valida si una fecha es parseable y válida.
  */
 export const isValidDate = (date) => {

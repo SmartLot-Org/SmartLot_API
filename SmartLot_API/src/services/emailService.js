@@ -1,12 +1,40 @@
 import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');
 
+import https from 'node:https';
 import { MailtrapClient } from 'mailtrap';
 import { pool } from '../database/dbClient.js';
 
 const mailtrapClient = new MailtrapClient({
     token: (process.env.EMAIL_PASS || '').trim()
 });
+
+/**
+ * Resuelve el agente HTTPS para la API de Mailtrap.
+ * La red local puede interceptar TLS con certificados autofirmados
+ * (SELF_SIGNED_CERT_IN_CHAIN, mismo caso que el pooler de Supabase en database/db.js).
+ * - EMAIL_CA_CERT: validación estricta con CA personalizada (PEM, admite \n escapados).
+ * - Fuera de producción: validación relajada.
+ * - En producción sin CA: null (agente estricto por defecto del SDK).
+ */
+export const resolveMailtrapHttpsAgent = () => {
+    if (process.env.EMAIL_CA_CERT) {
+        return new https.Agent({
+            keepAlive: true,
+            ca: process.env.EMAIL_CA_CERT.replace(/\\n/g, '\n'),
+            rejectUnauthorized: true,
+        });
+    }
+    if (process.env.NODE_ENV !== 'production') {
+        return new https.Agent({ keepAlive: true, rejectUnauthorized: false });
+    }
+    return null;
+};
+
+const mailtrapHttpsAgent = resolveMailtrapHttpsAgent();
+if (mailtrapHttpsAgent && mailtrapClient.axios?.defaults) {
+    mailtrapClient.axios.defaults.httpsAgent = mailtrapHttpsAgent;
+}
 
 // ─── Marca SmartLot ───────────────────────────────────────────────
 const BRAND = {
@@ -325,7 +353,10 @@ export const enviarCorreo = async (destinatario, asunto, contenidoHtml) => {
         console.log(`Correo enviado exitosamente a ${destinatario}. ID: ${messageId}`);
         return { success: true, messageId };
     } catch (error) {
-        console.error('Error en el servicio de correos:', error);
+        // Se registra solo código y mensaje: el objeto completo de axios puede
+        // incluir headers con el token de la API de Mailtrap.
+        const codigo = error?.code || error?.response?.status || 'desconocido';
+        console.error(`Error en el servicio de correos [${codigo}]:`, error?.message || error);
         throw new Error('No se pudo enviar el correo.');
     }
 };

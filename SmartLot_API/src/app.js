@@ -20,6 +20,7 @@ import ConflictoController from "./controllers/ConflictoController.js"
 import AuthController      from "./controllers/AuthController.js"
 import TratoEmpresaGarageController from "./controllers/tratoEmpresaGarageController.js"
 import SolicitudEmpresaGarageController from "./controllers/solicitudEmpresaGarageController.js"
+import SolicitudRegistroController from "./controllers/solicitudRegistroController.js"
 import NotificacionController from "./controllers/NotificacionController.js"
 import PaymentController from "./controllers/paymentController.js"
 import EmailTemplateController from "./controllers/emailTemplateController.js"
@@ -81,6 +82,7 @@ app.use("/api/reserva", authMiddleware, ReservaController);
 app.use("/api/rol", authMiddleware, RolController);
 app.use("/api/sede", authMiddleware, SedeController);
 app.use("/api/usuario", UsuarioController);
+app.use("/api/solicitud-registro", SolicitudRegistroController);
 app.use("/api/vehiculo", authMiddleware, VehiculoController);
 app.use("/api/auth", AuthController);
 app.use("/api/conflicto", authMiddleware, ConflictoController);
