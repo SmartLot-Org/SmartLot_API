@@ -33,12 +33,38 @@ export default class GarageService {
         await this._validarRelacionesAsync(entity);
         this._validarPrecios(entity);
         this._validarDiasGarage(entity);
-        if (!hasRole(usuario, ROLE_NAMES.DUENO_GARAGE)) return await this.repo.createAsync(entity);
+        const { id_dueno, id_garagistas = [], ...garageData } = entity;
+        const esSuperadmin = hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN);
+        const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
+        if (!Array.isArray(id_garagistas) || id_garagistas.some(id => !Number.isSafeInteger(id) || id <= 0)) {
+            fail('id_garagistas debe ser una lista de IDs enteros positivos.');
+        }
+        if (id_dueno !== undefined && (!Number.isSafeInteger(id_dueno) || id_dueno <= 0)) {
+            fail('id_dueno debe ser un entero positivo.');
+        }
+        if (!esSuperadmin && (id_dueno !== undefined || id_garagistas.length)) {
+            fail('Solo el superadmin puede asignar dueño y garagistas al crear el garage.', 403);
+        }
+        const ownerId = esSuperadmin ? id_dueno : hasRole(usuario, ROLE_NAMES.DUENO_GARAGE) ? usuario.id : undefined;
+        const staffIds = [...new Set(id_garagistas)];
+        if (!ownerId && staffIds.length) fail('Selecciona un dueño para asignar garagistas.');
+        if (!ownerId) return await this.repo.createAsync(garageData);
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            const garage = await this.repo.createWithClientAsync(entity, client);
-            await this.usuarioGarageService.createWithClientAsync(usuario.id, garage.id, client);
+            if (esSuperadmin) {
+                for (const [id, role] of [[ownerId, ROLE_NAMES.DUENO_GARAGE], ...staffIds.map(id => [id, ROLE_NAMES.GARAGISTA])]) {
+                    const result = await client.query(
+                        `SELECT u.id FROM usuarios u JOIN roles r ON r.id = u.id_rol
+                         WHERE u.id = $1 AND lower(trim(r.tipo_rol)) = $2
+                         AND COALESCE(u."Borrado", false) = false FOR SHARE OF u, r`, [id, role]);
+                    if (!result.rows.length) fail(`El usuario ${id} no existe o no tiene el rol ${role}.`);
+                }
+            }
+            const garage = await this.repo.createWithClientAsync(garageData, client);
+            for (const id of [ownerId, ...staffIds]) {
+                await this.usuarioGarageService.createWithClientAsync(id, garage.id, client);
+            }
             await client.query('COMMIT');
             return garage;
         } catch (error) {
