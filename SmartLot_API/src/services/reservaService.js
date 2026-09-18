@@ -472,13 +472,6 @@ export default class ReservaService {
     }
 
     _validarAccesoGarageAsync = async (id_garage, requestingUser) => {
-        const rol = Number(requestingUser?.id_rol);
-        if (rol === 3 && Number(requestingUser?.id_garage) !== Number(id_garage)) {
-            const error = new Error('No tiene permisos para operar este garage.');
-            error.statusCode = 403;
-            throw error;
-        }
-
         const garage = await this.garageService.getByIdAsync(id_garage, requestingUser);
         if (!garage) {
             const error = new Error('El garage no existe o no pertenece a su organizacion.');
@@ -499,17 +492,13 @@ export default class ReservaService {
             throw error;
         }
 
-        if (Number(requestingUser?.id_rol) === 3
-            && Number(requestingUser?.id_garage) !== Number(reserva.id_garage)) {
-            const error = new Error('No tiene permisos para operar reservas de otro garage.');
-            error.statusCode = 403;
-            throw error;
-        }
-
         if (Number(requestingUser?.id_rol) !== 4) {
             const garageAutorizado = await this.garageService.getByIdAsync(reserva.id_garage, requestingUser);
             if (!garageAutorizado) {
-                const error = new Error('No tiene permisos para operar reservas de otra organizacion.');
+                const message = Number(requestingUser?.id_rol) === 3
+                    ? 'No tiene permisos para operar reservas de otro garage.'
+                    : 'No tiene permisos para operar reservas de otra organizacion.';
+                const error = new Error(message);
                 error.statusCode = 403;
                 throw error;
             }

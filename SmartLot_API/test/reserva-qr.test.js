@@ -82,7 +82,7 @@ function checkInFixture() {
   };
   svc.garageService = {
     getByIdAsync: async (id, user) => (
-      Number(id) === 8 && (Number(user?.id_rol) !== 3 || Number(user?.id_garage) === 8)
+      Number(id) === 8 && (Number(user?.id_rol) !== 3 || Number(user?.id) === 30)
         ? { id: 8 }
         : null
     ),
@@ -154,7 +154,7 @@ test('un QR con formato valido pero inexistente devuelve 404', async () => {
 
 test('un garagista autorizado registra el ingreso reutilizando el check-in transaccional', async () => {
   const { svc, state } = checkInFixture();
-  const result = await svc.checkInByQrAsync(QR, { id: 30, id_rol: 3, id_garage: 8 });
+  const result = await svc.checkInByQrAsync(QR, { id: 30, id_rol: 3, id_garage: 99 });
   assert.equal(result.entro, true);
   assert.equal(state.reservationUpdates, 1);
   assert.equal(state.garageUpdates, 1);
@@ -164,7 +164,7 @@ test('un garagista autorizado registra el ingreso reutilizando el check-in trans
 
 test('un garagista no puede usar un QR de otro garage', async () => {
   const { svc, state } = checkInFixture();
-  await assert.rejects(svc.checkInByQrAsync(QR, { id: 31, id_rol: 3, id_garage: 99 }), { statusCode: 403 });
+  await assert.rejects(svc.checkInByQrAsync(QR, { id: 31, id_rol: 3, id_garage: 8 }), { statusCode: 403 });
   assert.equal(state.reservationUpdates, 0);
   assert.equal(state.garageUpdates, 0);
   assert.ok(state.commands.includes('ROLLBACK'));
