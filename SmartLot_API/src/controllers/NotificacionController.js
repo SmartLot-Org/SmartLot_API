@@ -7,16 +7,14 @@ const router = Router();
 const svc = new NotificacionService();
 
 router.get('', authMiddleware, async (req, res) => {
-    const id_usuario = req.usuario.id;
     const leida = req.query.leida;
-    const data = await svc.listByUsuarioAsync(id_usuario, leida === 'true');
+    const data = await svc.listByUsuarioAsync(req.usuario, leida === 'true');
     const max = data ? data.slice(0, 50) : [];
     res.status(200).json(max);
 });
 
 router.get('/no-leidas/count', authMiddleware, async (req, res) => {
-    const id_usuario = req.usuario.id;
-    const count = await svc.countNoLeidasAsync(id_usuario);
+    const count = await svc.countNoLeidasAsync(req.usuario);
     res.status(200).json({ no_leidas: count });
 });
 

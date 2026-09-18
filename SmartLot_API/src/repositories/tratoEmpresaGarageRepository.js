@@ -9,28 +9,29 @@ const DETAIL_SELECT = `
   FROM trato_empresa_garage t
   JOIN sedes s ON s.id=t.id_sede
   JOIN empresas e ON e.id=s.id_empresa
-  JOIN garages g ON g.id=t.id_garage`;
+  JOIN garages g ON g.id=t.id_garage
+  WHERE COALESCE(t."Borrado", false) = false`;
 
 export default class TratoEmpresaGarageRepository {
     getAllAsync = async () => (await pool.query(`${DETAIL_SELECT} ORDER BY t.id`)).rows;
-    getByIdAsync = async (id) => (await pool.query(`${DETAIL_SELECT} WHERE t.id=$1`, [id])).rows[0] ?? null;
+    getByIdAsync = async (id) => (await pool.query(`${DETAIL_SELECT} AND t.id=$1`, [id])).rows[0] ?? null;
     getByEmpresaAsync = async (idEmpresa, idSede = null) => (await pool.query(
-        `${DETAIL_SELECT} WHERE s.id_empresa=$1 AND ($2::int IS NULL OR t.id_sede=$2) ORDER BY t.id`, [idEmpresa, idSede]
+        `${DETAIL_SELECT} AND s.id_empresa=$1 AND ($2::int IS NULL OR t.id_sede=$2) ORDER BY t.id`, [idEmpresa, idSede]
     )).rows;
-    getByGarageAsync = async (idGarage) => (await pool.query(`${DETAIL_SELECT} WHERE t.id_garage=$1 ORDER BY t.id`, [idGarage])).rows;
+    getByGarageAsync = async (idGarage) => (await pool.query(`${DETAIL_SELECT} AND t.id_garage=$1 ORDER BY t.id`, [idGarage])).rows;
     getByOwnerAsync = async (idUsuario) => (await pool.query(
-        `${DETAIL_SELECT} WHERE EXISTS (
+        `${DETAIL_SELECT} AND EXISTS (
             SELECT 1 FROM usuario_garage ug WHERE ug.id_usuario=$1 AND ug.id_garage=t.id_garage
         ) ORDER BY t.id`, [idUsuario]
     )).rows;
     getBySedeGarageAsync = async (idSede, idGarage, excludeId = null) => (await pool.query(
-        `SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 AND ($3::int IS NULL OR id<>$3) LIMIT 1`,
+        `SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 AND COALESCE("Borrado", false)=false AND ($3::int IS NULL OR id<>$3) LIMIT 1`,
         [idSede, idGarage, excludeId]
     )).rows[0] ?? null;
 
     getBySedeGarageWithClientAsync = async (idSede, idGarage, client) => {
         const result = await client.query(
-            'SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 LIMIT 1',
+            'SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 AND COALESCE("Borrado", false)=false LIMIT 1',
             [idSede, idGarage]
         );
         return result.rows[0] ?? null;
@@ -38,7 +39,7 @@ export default class TratoEmpresaGarageRepository {
 
     sumCantidadByGarageWithClientAsync = async (idGarage, client, excludeId = null) => {
         const result = await client.query(
-            'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND ($2::int IS NULL OR id<>$2)',
+            'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND COALESCE("Borrado", false)=false AND ($2::int IS NULL OR id<>$2)',
             [idGarage, excludeId]
         );
         return Number(result.rows[0]?.total ?? 0);
@@ -61,7 +62,7 @@ export default class TratoEmpresaGarageRepository {
             await client.query('BEGIN');
             const current = (await client.query(
                 `SELECT t.*, s.id_empresa FROM trato_empresa_garage t
-                 JOIN sedes s ON s.id=t.id_sede WHERE t.id=$1 FOR UPDATE OF t`, [id]
+                 JOIN sedes s ON s.id=t.id_sede WHERE t.id=$1 AND COALESCE(t."Borrado", false)=false FOR UPDATE OF t`, [id]
             )).rows[0];
             if (!current) throw Object.assign(new Error('El trato no existe.'), { statusCode: 404 });
             if (current.modalidad_pago === modalidad) {
@@ -98,7 +99,7 @@ export default class TratoEmpresaGarageRepository {
             )).rows[0];
             if (!garage) throw Object.assign(new Error('El garage no existe.'), { statusCode: 404 });
             const occupied = Number((await client.query(
-                'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1', [entity.id_garage]
+                'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND COALESCE("Borrado", false)=false', [entity.id_garage]
             )).rows[0].total);
             if (occupied + entity.cantidad_cocheras > Number(garage.capacidad)) {
                 throw Object.assign(new Error('La suma de cocheras contratadas supera la capacidad total del garage.'), { statusCode: 409 });
@@ -122,11 +123,11 @@ export default class TratoEmpresaGarageRepository {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-            const current = (await client.query('SELECT * FROM trato_empresa_garage WHERE id=$1 FOR UPDATE', [id])).rows[0];
+            const current = (await client.query('SELECT * FROM trato_empresa_garage WHERE id=$1 AND COALESCE("Borrado", false)=false FOR UPDATE', [id])).rows[0];
             if (!current) throw Object.assign(new Error('El trato no existe.'), { statusCode: 404 });
             const garage = (await client.query('SELECT capacidad FROM garages WHERE id=$1 FOR UPDATE', [current.id_garage])).rows[0];
             const others = Number((await client.query(
-                'SELECT COALESCE(SUM(cantidad_cocheras),0) total FROM trato_empresa_garage WHERE id_garage=$1 AND id<>$2',
+                'SELECT COALESCE(SUM(cantidad_cocheras),0) total FROM trato_empresa_garage WHERE id_garage=$1 AND id<>$2 AND COALESCE("Borrado", false)=false',
                 [current.id_garage, id]
             )).rows[0].total);
             if (others + cantidad > Number(garage.capacidad)) {
@@ -141,5 +142,8 @@ export default class TratoEmpresaGarageRepository {
         finally { client.release(); }
     };
 
-    deleteAsync = async (id) => (await pool.query('DELETE FROM trato_empresa_garage WHERE id=$1 RETURNING id', [id])).rowCount > 0;
+    softDeleteAsync = async (id) => (await pool.query(
+        'UPDATE trato_empresa_garage SET "Borrado" = true WHERE id=$1 AND COALESCE("Borrado", false)=false RETURNING id',
+        [id]
+    )).rowCount > 0;
 }

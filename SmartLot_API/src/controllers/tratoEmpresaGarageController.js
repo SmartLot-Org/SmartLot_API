@@ -72,9 +72,17 @@ router.put('/:id', requireRole(...writeRoles), async (req, res) => {
     res.status(200).json(await svc.updateAsync(parseId(req.params.id), body(req.body, true), req.usuario));
 });
 
+router.patch('/:id/cancelar', requireRole(...writeRoles), async (req, res) => {
+    const ok = await svc.cancelAsync(parseId(req.params.id), req.usuario);
+    if (!ok) fail('El trato no existe o ya está cancelado.', 404);
+    res.status(200).json({ message: 'Trato cancelado exitosamente.' });
+});
+
+// Alias histórico: hace la misma cancelación lógica (soft delete), nunca DELETE físico.
 router.delete('/:id', requireRole(...writeRoles), async (req, res) => {
-    await svc.deleteAsync(parseId(req.params.id), req.usuario);
-    res.status(200).json({ message: 'Eliminado exitosamente.' });
+    const ok = await svc.cancelAsync(parseId(req.params.id), req.usuario);
+    if (!ok) fail('El trato no existe o ya está cancelado.', 404);
+    res.status(200).json({ message: 'Trato cancelado exitosamente.' });
 });
 
 export default router;

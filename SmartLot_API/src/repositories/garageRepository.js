@@ -23,7 +23,7 @@ export default class GarageRepository {
                         params.push(requestingUser.id_sede);
                         accessSql += ` AND teg.id_sede = $${params.length}`;
                     }
-                    accessSql += ')';
+                    accessSql += ' AND COALESCE(teg."Borrado", false) = false)';
                 }
             }
             const result = await pool.query(`
@@ -54,7 +54,7 @@ export default class GarageRepository {
                         params.push(requestingUser.id_sede);
                         accessSql += ` AND teg.id_sede = $${params.length}`;
                     }
-                    accessSql += ')';
+                    accessSql += ' AND COALESCE(teg."Borrado", false) = false)';
                 }
             }
             const result = await pool.query(`
@@ -221,7 +221,7 @@ export default class GarageRepository {
                         params.push(requestingUser.id_sede);
                         accessSql += ` AND teg.id_sede = $${params.length}`;
                     }
-                    accessSql += ')';
+                    accessSql += ' AND COALESCE(teg."Borrado", false) = false)';
                 }
             }
             const result = await pool.query(
@@ -337,8 +337,8 @@ export default class GarageRepository {
         try {
             const result = await pool.query(`
                 SELECT g.*, COALESCE((SELECT array_agg(gd.dia::text ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage=g.id AND gd.activo=true), '{}'::text[]) AS dias,
-                  GREATEST(0, COALESCE(g.capacidad,0) - COALESCE((SELECT SUM(t.cantidad_cocheras) FROM trato_empresa_garage t WHERE t.id_garage=g.id),0)) AS cocheras_disponibles,
-                  EXISTS(SELECT 1 FROM trato_empresa_garage ts WHERE ts.id_garage=g.id AND ts.id_sede=$4) AS ya_contratado, (
+                  GREATEST(0, COALESCE(g.capacidad,0) - COALESCE((SELECT SUM(t.cantidad_cocheras) FROM trato_empresa_garage t WHERE t.id_garage=g.id AND COALESCE(t."Borrado", false)=false),0)) AS cocheras_disponibles,
+                  EXISTS(SELECT 1 FROM trato_empresa_garage ts WHERE ts.id_garage=g.id AND ts.id_sede=$4 AND COALESCE(ts."Borrado", false)=false) AS ya_contratado, (
                     6371 * acos(
                         cos(radians($1)) * cos(radians(latitud)) *
                         cos(radians(longitud) - radians($2)) +

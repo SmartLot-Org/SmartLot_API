@@ -39,17 +39,21 @@ export default class TratoEmpresaGarageService {
         }
     };
 
-    _obtenerUsuariosGarage = async (idGarage) => {
+    _obtenerDueniosGarage = async (idGarage) => {
         try {
             const result = await pool.query(
                 `SELECT u.id, u.nombre, u.apellido FROM usuarios u
                  INNER JOIN usuario_garage ug ON ug.id_usuario = u.id
-                 WHERE ug.id_garage = $1 AND COALESCE(u."Borrado", false) = false`,
+                 INNER JOIN roles r ON r.id = u.id_rol
+                 WHERE ug.id_garage = $1
+                   AND lower(trim(r.tipo_rol)) = 'dueño_garage'
+                   AND COALESCE(u."Borrado", false) = false
+                   AND COALESCE(r."Borrado", false) = false`,
                 [idGarage]
             );
             return result.rows;
         } catch (err) {
-            console.error('Error al obtener usuarios del garage:', err);
+            console.error('Error al obtener dueños del garage:', err);
             return [];
         }
     };
@@ -106,11 +110,11 @@ export default class TratoEmpresaGarageService {
             try {
                 const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';
                 const actorNombre = await this._obtenerActorNombre(usuario.id);
-                const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
+                const dueniosGarage = await this._obtenerDueniosGarage(current.id_garage);
                 const mensaje = `El ${rol} ${actorNombre} modificó su trato con el garage ${current.garage_nombre} (ahora ${cantidad} cocheras).`;
-                for (const usuarioGarage of usuariosGarage) {
+                for (const duenio of dueniosGarage) {
                     await this.notificacionService.crearAsync(
-                        usuarioGarage.id, mensaje, 'trato_modificado', actorNombre, current.id_garage
+                        duenio.id, mensaje, 'trato_modificado', actorNombre, current.id_garage
                     );
                 }
             } catch (err) { console.error('Error al crear notificación de actualización de trato:', err); }
@@ -131,18 +135,18 @@ export default class TratoEmpresaGarageService {
         if (!this._adminCanManage(usuario, current)) fail('No puede modificar la modalidad de este trato.', 403);
         return this.repo.updatePaymentModalityAsync(id, modalidad, usuario.id);
     };
-    deleteAsync = async (id, usuario) => {
+    cancelAsync = async (id, usuario) => {
         const current = await this.getByIdAsync(id, usuario);
-        if (!this._adminCanManage(usuario, current)) fail('No puede eliminar este trato.', 403);
+        if (!this._adminCanManage(usuario, current)) fail('No puede cancelar este trato.', 403);
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {
             const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';
             const actorNombre = await this._obtenerActorNombre(usuario.id);
-            const usuariosGarage = await this._obtenerUsuariosGarage(current.id_garage);
+            const dueniosGarage = await this._obtenerDueniosGarage(current.id_garage);
             const mensaje = `El ${rol} ${actorNombre} canceló su trato con el garage ${current.garage_nombre}.`;
-            for (const usuarioGarage of usuariosGarage) {
+            for (const duenio of dueniosGarage) {
                 await this.notificacionService.crearAsync(
-                    usuarioGarage.id,
+                    duenio.id,
                     mensaje,
                     'trato_cancelado',
                     actorNombre,
@@ -150,9 +154,9 @@ export default class TratoEmpresaGarageService {
                 );
             }
         } catch (err) {
-            console.error('Error al crear notificación de eliminación de trato:', err);
+            console.error('Error al crear notificación de cancelación de trato:', err);
         }
-        return this.repo.deleteAsync(id);
+        return this.repo.softDeleteAsync(id);
     };
     _adminCanManage = (usuario, row) => hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN) ||
         (hasRole(usuario, 1, ROLE_NAMES.ADMIN) && Number(usuario.id_empresa) === Number(row.id_empresa) &&

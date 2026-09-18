@@ -62,6 +62,20 @@ export default class NotificacionRepository {
         } catch (error) { console.error(error); return false; }
     }
 
+    esGaragistaAsync = async (id_usuario) => {
+        try {
+            const result = await pool.query(
+                `SELECT 1 FROM usuarios u
+                 INNER JOIN roles r ON r.id = u.id_rol
+                 WHERE u.id = $1
+                   AND (u.id_rol = 3 OR lower(trim(r.tipo_rol)) = 'garagista')
+                 LIMIT 1`,
+                [id_usuario]
+            );
+            return result.rowCount > 0;
+        } catch (error) { console.error(error); return false; }
+    }
+
     insertarAsync = async (notificacion) => {
         try {
             const result = await pool.query(

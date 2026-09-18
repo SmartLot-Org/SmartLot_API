@@ -64,7 +64,7 @@ function tratoService() {
     getByGarageAsync: async (g) => rows.filter((r) => r.id_garage === g),
     getAllAsync: async () => rows,
     updateQuantityAsync: async (id, cantidad) => Object.assign(rows.find((r) => r.id === id), { cantidad_cocheras: cantidad }),
-    deleteAsync: async (id) => rows.splice(rows.findIndex((r) => r.id === id), 1).length === 1,
+    softDeleteAsync: async (id) => rows.splice(rows.findIndex((r) => r.id === id), 1).length === 1,
   };
   return { svc, rows };
 }
@@ -94,6 +94,7 @@ test('admin solo puede cambiar cantidad, no empresa, garage ni precio', async ()
 const controller = await readFile(new URL('../src/controllers/garageController.js', import.meta.url), 'utf8');
 const repository = await readFile(new URL('../src/repositories/garageRepository.js', import.meta.url), 'utf8');
 const tratoRepo = await readFile(new URL('../src/repositories/tratoEmpresaGarageRepository.js', import.meta.url), 'utf8');
+const tratoController = await readFile(new URL('../src/controllers/tratoEmpresaGarageController.js', import.meta.url), 'utf8');
 test('admin no puede crear, editar ni eliminar garage físico y cercanos está antes de /:id', () => {
   assert.match(controller, /post\('', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
   assert.match(controller, /put\('\/:id', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
@@ -112,4 +113,27 @@ test('acceso normal usa usuario_garage o trato derivando empresa mediante sede',
 });
 test('capacidad de tratos se suma bajo bloqueo de garage', () => {
   assert.match(tratoRepo, /FOR UPDATE/); assert.match(tratoRepo, /SUM\(cantidad_cocheras\)/);
+});
+test('cancelar trato hace soft delete y notifica al dueño', async () => {
+  const { svc, rows } = tratoService();
+  const notificados = [];
+  svc.notificacionService = { crearAsync: async (id, mensaje, tipo) => { notificados.push({ id, tipo }); } };
+  svc._obtenerActorNombre = async () => 'Admin';
+  svc._obtenerDueniosGarage = async () => [{ id: 50 }];
+  const row = await svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  assert.equal(await svc.cancelAsync(row.id, admin), true);
+  assert.equal(rows.length, 0);
+  assert.deepEqual(notificados, [{ id: 50, tipo: 'trato_cancelado' }]);
+});
+test('repo de tratos no borra físicamente y filtra cancelados', () => {
+  assert.doesNotMatch(tratoRepo, /DELETE FROM trato_empresa_garage/);
+  assert.match(tratoRepo, /SET "Borrado" = true/);
+  assert.match(tratoRepo, /SET "Borrado" = true WHERE id=\$1 AND COALESCE\("Borrado", false\)=false/);
+  assert.match(tratoRepo, /WHERE COALESCE\(t\."Borrado", false\) = false/);
+  assert.match(tratoRepo, /AND COALESCE\("Borrado", false\)=false/);
+});
+test('cancelar trato expone PATCH y mantiene DELETE como alias lógico', () => {
+  assert.match(tratoController, /patch\('\/:id\/cancelar'/);
+  assert.match(tratoController, /svc\.cancelAsync/);
+  assert.doesNotMatch(tratoController, /svc\.deleteAsync/);
 });

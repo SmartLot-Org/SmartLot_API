@@ -30,17 +30,21 @@ export default class SolicitudEmpresaGarageService {
         }
     };
 
-    _obtenerUsuariosGarage = async (idGarage) => {
+    _obtenerDueniosGarage = async (idGarage) => {
         try {
             const result = await pool.query(
                 `SELECT u.id, u.nombre, u.apellido FROM usuarios u
                  INNER JOIN usuario_garage ug ON ug.id_usuario = u.id
-                 WHERE ug.id_garage = $1 AND COALESCE(u."Borrado", false) = false`,
+                 INNER JOIN roles r ON r.id = u.id_rol
+                 WHERE ug.id_garage = $1
+                   AND lower(trim(r.tipo_rol)) = 'dueño_garage'
+                   AND COALESCE(u."Borrado", false) = false
+                   AND COALESCE(r."Borrado", false) = false`,
                 [idGarage]
             );
             return result.rows;
         } catch (err) {
-            console.error('Error al obtener usuarios del garage:', err);
+            console.error('Error al obtener dueños del garage:', err);
             return [];
         }
     };
@@ -107,12 +111,12 @@ export default class SolicitudEmpresaGarageService {
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
             const garageNombre = await this._obtenerNombreGarage(idGarage);
-            const usuariosGarage = await this._obtenerUsuariosGarage(idGarage);
-            for (const usuarioGarage of usuariosGarage) {
+            const dueniosGarage = await this._obtenerDueniosGarage(idGarage);
+            for (const duenio of dueniosGarage) {
                 await this.notificacionService.crearAsync(
-                    usuarioGarage.id,
+                    duenio.id,
                     `${actorNombre} quiere hacer un trato con ${garageNombre} por ${cantidad} cocheras.`,
-                    'solicitud_empresa_garage',
+                    'solicitud_enviada',
                     actorNombre,
                     idGarage
                 );
@@ -163,8 +167,8 @@ export default class SolicitudEmpresaGarageService {
                 for (const admin of admins) {
                     await this.notificacionService.crearAsync(
                         admin.id,
-                        `${actorNombre} ha ${solicitud.estado === 'aceptada' ? 'aceptado' : 'rechazado'} la solicitud de trato para ${garageNombre}.`,
-                        'solicitud_empresa_garage',
+                        `${actorNombre} ha aceptado la solicitud de trato para ${garageNombre}.`,
+                        'solicitud_aceptada',
                         actorNombre
                     );
                 }
@@ -191,8 +195,8 @@ export default class SolicitudEmpresaGarageService {
                 for (const admin of admins) {
                     await this.notificacionService.crearAsync(
                         admin.id,
-                        `${actorNombre} ha ${solicitud.estado === 'rechazada' ? 'rechazado' : 'aceptado'} la solicitud de trato para ${garageNombre}.`,
-                        'solicitud_empresa_garage',
+                        `${actorNombre} ha rechazado la solicitud de trato para ${garageNombre}.`,
+                        'solicitud_rechazada',
                         actorNombre
                     );
                 }
@@ -212,12 +216,12 @@ export default class SolicitudEmpresaGarageService {
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
             const garageNombre = await this._obtenerNombreGarage(result.id_garage);
-            const usuariosGarage = await this._obtenerUsuariosGarage(result.id_garage);
-            for (const usuarioGarage of usuariosGarage) {
+            const dueniosGarage = await this._obtenerDueniosGarage(result.id_garage);
+            for (const duenio of dueniosGarage) {
                 await this.notificacionService.crearAsync(
-                    usuarioGarage.id,
+                    duenio.id,
                     `${actorNombre} ha cancelado la solicitud de trato para ${garageNombre}.`,
-                    'solicitud_empresa_garage',
+                    'solicitud_cancelada',
                     actorNombre,
                     result.id_garage
                 );
@@ -265,11 +269,11 @@ export default class SolicitudEmpresaGarageService {
         try {
             const actorNombre = await this._obtenerActorNombre(usuario.id);
             const garageNombre = await this._obtenerNombreGarage(Number(trato.id_garage));
-            const usuariosGarage = await this._obtenerUsuariosGarage(Number(trato.id_garage));
+            const dueniosGarage = await this._obtenerDueniosGarage(Number(trato.id_garage));
             const mensaje = `${actorNombre} solicita cambiar la cantidad de cocheras del trato con ${garageNombre} de ${trato.cantidad_cocheras} a ${nuevaCantidad} cocheras.`;
-            for (const usuarioGarage of usuariosGarage) {
+            for (const duenio of dueniosGarage) {
                 await this.notificacionService.crearAsync(
-                    usuarioGarage.id,
+                    duenio.id,
                     mensaje,
                     'solicitud_modificacion',
                     actorNombre,

@@ -30,7 +30,7 @@ export default class ReservaRepository {
         if (!vehicle) throw Object.assign(new Error('El vehiculo no pertenece al empleado autenticado.'), { statusCode: 403 });
         const garage = (await client.query(`SELECT id,capacidad,estado FROM garages WHERE id=$1 AND COALESCE("Borrado",false)=false FOR UPDATE`, [entity.id_garage])).rows[0];
         if (!garage || garage.estado === false) throw Object.assign(new Error('El garage no existe o no esta activo.'), { statusCode: 404 });
-        const trato = (await client.query(`SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 FOR UPDATE`, [user.id_sede,entity.id_garage])).rows[0];
+        const trato = (await client.query(`SELECT * FROM trato_empresa_garage WHERE id_sede=$1 AND id_garage=$2 AND COALESCE("Borrado",false)=false FOR UPDATE`, [user.id_sede,entity.id_garage])).rows[0];
         if (!trato) throw Object.assign(new Error('No existe un trato activo para la sede y el garage.'), { statusCode: 409 });
         // Las columnas fecha_entrada/fecha_salida son timestamp SIN zona horaria
         // y guardan hora local de Argentina. Comparar naive-vs-naive (los casts

@@ -12,15 +12,19 @@ const DETAIL_SELECT = `
            g.capacidad AS garage_capacidad, g.estado AS garage_estado,
            g.precio_auto, g.precio_moto, g.precio_pickup,
            GREATEST(0, COALESCE(g.capacidad,0) - COALESCE((
-               SELECT SUM(t.cantidad_cocheras) FROM trato_empresa_garage t WHERE t.id_garage=so.id_garage
+               SELECT SUM(t.cantidad_cocheras) FROM trato_empresa_garage t WHERE t.id_garage=so.id_garage AND COALESCE(t."Borrado", false)=false
            ),0)) AS capacidad_disponible,
            (CASE WHEN so.tipo_solicitud = 'modificacion' AND so.id_trato IS NOT NULL
-                 THEN (SELECT t2.cantidad_cocheras FROM trato_empresa_garage t2 WHERE t2.id=so.id_trato)
+                 THEN (SELECT t2.cantidad_cocheras FROM trato_empresa_garage t2 WHERE t2.id=so.id_trato AND COALESCE(t2."Borrado", false)=false)
                  ELSE NULL END) AS cantidad_actual_trato,
            (SELECT STRING_AGG(ud.nombre || ' ' || ud.apellido, ', ')
               FROM usuario_garage ug2
               JOIN usuarios ud ON ud.id = ug2.id_usuario
-             WHERE ug2.id_garage = so.id_garage AND COALESCE(ud."Borrado", false) = false
+              JOIN roles rd ON rd.id = ud.id_rol
+             WHERE ug2.id_garage = so.id_garage
+               AND lower(trim(rd.tipo_rol)) = 'dueño_garage'
+               AND COALESCE(ud."Borrado", false) = false
+               AND COALESCE(rd."Borrado", false) = false
            ) AS duenio_nombre
       FROM solicitudes so
       JOIN sedes s ON s.id=so.id_sede
@@ -209,7 +213,7 @@ export default class SolicitudEmpresaGarageRepository {
             )).rowCount > 0;
             if (!owns) fail('No tiene permisos sobre el garage de la solicitud.', 403);
             const trato = (await client.query(
-                'SELECT * FROM trato_empresa_garage WHERE id=$1 FOR UPDATE', [solicitud.id_trato]
+                'SELECT * FROM trato_empresa_garage WHERE id=$1 AND COALESCE("Borrado", false)=false FOR UPDATE', [solicitud.id_trato]
             )).rows[0];
             if (!trato) fail('El trato asociado no existe.', 404);
             const garage = (await client.query(
@@ -217,7 +221,7 @@ export default class SolicitudEmpresaGarageRepository {
             )).rows[0];
             if (!garage) fail('El garage no existe.', 404);
             const otros = Number((await client.query(
-                'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND id<>$2',
+                'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND id<>$2 AND COALESCE("Borrado", false)=false',
                 [solicitud.id_garage, solicitud.id_trato]
             )).rows[0].total);
             const nuevaCantidad = Number(solicitud.cantidad_cocheras);
