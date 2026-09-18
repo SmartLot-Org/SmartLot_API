@@ -101,7 +101,9 @@ export default class ReservaRepository {
 
     getControlAccesoAsync = async (id_garage, fecha, requestingUser) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 3, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            // El acceso del garagista/dueño se valida por usuario_garage; el filtro
+            // de tenant por sede/empresa sigue aplicando a los demas roles.
+            const tenant = getTenantCondition(requestingUser, 3, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', garageColumn: 'r.id_garage' });
             const result = await pool.query(
                 `SELECT r.*,
                         CONCAT_WS(' ', u.nombre, u.apellido) AS conductor,

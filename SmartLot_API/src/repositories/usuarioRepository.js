@@ -75,7 +75,12 @@ export default class UsuarioRepository {
 
     getByIdAsync = async (id, requestingUser = null) => {
         try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+            // Cada usuario siempre puede leer su propio registro (la ruta valida
+            // que sea admin, superadmin o el propio usuario). Los garagistas y
+            // dueños no tienen id_sede/id_empresa y no deben quedar bloqueados.
+            const tenant = requestingUser && Number(requestingUser.id) === Number(id)
+                ? { sql: '', params: [] }
+                : getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
             const result = await pool.query(
                 `SELECT u.*, r.tipo_rol,
                     CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,

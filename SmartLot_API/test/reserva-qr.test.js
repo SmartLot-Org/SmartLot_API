@@ -162,6 +162,26 @@ test('un garagista autorizado registra el ingreso reutilizando el check-in trans
   assert.ok(state.commands.includes('COMMIT'));
 });
 
+test('un garagista sin sede ni empresa hace check-in por patente', async () => {
+  const { svc, state } = checkInFixture();
+  const result = await svc.checkInAsync(15, 'AA123BB', {
+    id: 30, id_rol: 3, tipo_rol: 'garagista', id_sede: null, id_empresa: null,
+  });
+  assert.equal(result.entro, true);
+  assert.equal(state.reservationUpdates, 1);
+  assert.equal(state.garageUpdates, 1);
+});
+
+test('un garagista sin sede ni empresa hace check-in por QR', async () => {
+  const { svc, state } = checkInFixture();
+  const result = await svc.checkInByQrAsync(QR, {
+    id: 30, id_rol: 3, tipo_rol: 'garagista', id_sede: null, id_empresa: null,
+  });
+  assert.equal(result.entro, true);
+  assert.equal(state.reservationUpdates, 1);
+  assert.equal(state.garageUpdates, 1);
+});
+
 test('un garagista no puede usar un QR de otro garage', async () => {
   const { svc, state } = checkInFixture();
   await assert.rejects(svc.checkInByQrAsync(QR, { id: 31, id_rol: 3, id_garage: 8 }), { statusCode: 403 });

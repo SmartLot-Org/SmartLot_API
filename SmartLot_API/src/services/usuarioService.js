@@ -12,6 +12,12 @@ import bcrypt from 'bcrypt';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
+// Regla de negocio: un garagista no depende de empresa ni sede. Su relacion con
+// los garages vive exclusivamente en `usuario_garage`. El servidor fuerza estos
+// campos a NULL sin importar lo que envie el cliente.
+const esRolGaragista = (rol) =>
+    Number(rol?.id) === 3 || String(rol?.tipo_rol ?? '').trim().toLowerCase() === 'garagista';
+
 export default class UsuarioService {
     constructor() {
         console.log('Estoy en: UsuarioService.constructor()');
@@ -212,16 +218,23 @@ export default class UsuarioService {
             error.statusCode = 404;
             throw error;
         }
-        return await this.usuarioGarageService.getUsuariosByGarageIdAsync(id_garage, requestingUser);
+        const usuarios = await this.usuarioGarageService.getUsuariosByGarageIdAsync(id_garage, requestingUser);
+        if (!Array.isArray(usuarios)) return usuarios;
+        return usuarios.map(({ contraseña, ...usuario }) => usuario);
     }
 
     createAsync = async (entity) => {
-        await this._validarRelacionesAsync(entity);
-
-        // Obtener el rol para verificar si es "garagista"
+        // Obtener el rol primero: si es garagista, se anulan sede y empresa antes
+        // de validar relaciones, para que el cliente no pueda imponerlas.
         const rol = await this.rolService.getByIdAsync(entity.id_rol);
-        const tipoRol = rol?.tipo_rol?.toLowerCase();
-        const esGaragista = tipoRol === 'garagista';
+        const esGaragista = esRolGaragista(rol);
+
+        if (esGaragista) {
+            entity.id_sede = null;
+            entity.id_empresa = null;
+        }
+
+        await this._validarRelacionesAsync(entity);
 
         // Validaciones si es "garagista"
         if (esGaragista) {
@@ -306,6 +319,17 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         }
 
         await this._aplicarReglasDeActualizacion(entity, requestingUser, id);
+
+        // Un garagista nunca depende de empresa ni sede: si el usuario ya lo es,
+        // o si este update le asigna ese rol, los campos se fuerzan a NULL.
+        const rolEfectivoId = entity.id_rol !== undefined ? entity.id_rol : current.id_rol;
+        const tipoRolEfectivo = entity.id_rol !== undefined
+            ? (await this.rolService.getByIdAsync(entity.id_rol))?.tipo_rol
+            : current.tipo_rol;
+        if (esRolGaragista({ id: rolEfectivoId, tipo_rol: tipoRolEfectivo })) {
+            entity.id_sede = null;
+            entity.id_empresa = null;
+        }
 
         // Aislamiento de tenant: un admin no puede mover usuarios a sedes de otra empresa.
         if (Number(requestingUser.id_rol) === 1 && entity.id_sede) {

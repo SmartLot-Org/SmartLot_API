@@ -15,11 +15,19 @@ function throwError(message, statusCode) {
     throw error;
 }
 
+// Nunca exponer el hash de la contraseña en respuestas HTTP.
+function sinContraseña(data) {
+    if (Array.isArray(data)) return data.map(sinContraseña);
+    if (!data || typeof data !== 'object') return data;
+    const { contraseña, ...usuario } = data;
+    return usuario;
+}
+
 // GET ALL (admin o smartlot)
 router.get('', authMiddleware, requireRole(1, 4), async (req, res) => {
     const data = await svc.getAllAsync(req.usuario);
     if (!data) throwError('Error interno del servidor', 500);
-    res.status(200).json(data);
+    res.status(200).json(sinContraseña(data));
 });
 
 // GET BY GARAGE ID (admin, smartlot o garagista)
@@ -29,7 +37,7 @@ router.get('/garage/:id_garage', authMiddleware, requireRole(1, 3, 4, 'dueño_ga
 
     const data = await svc.getGaragistasByGarageIdAsync(idGarage, req.usuario);
     if (!data) throwError('No encontrado.', 404);
-    res.status(200).json(data);
+    res.status(200).json(sinContraseña(data));
 });
 
 // LOGIN
@@ -278,7 +286,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
     const data = await svc.getByIdAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
-    res.status(200).json(data);
+    res.status(200).json(sinContraseña(data));
 });
 
 // REGISTRO PUBLICO (sin autenticacion) - crea cuentas de rol cliente/empleado (2)
@@ -393,9 +401,8 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     }
 
     if (esGaragista) {
-        if (id_sede !== undefined && id_sede !== null && !isValidId(id_sede)) {
-            throwError('El id_sede debe ser nulo o un número válido para el garagista.', 400);
-        }
+        // Un garagista no depende de empresa ni sede: el servicio fuerza ambos a
+        // NULL. Solo se exige el garage, que se registra en usuario_garage.
         if (!isValidId(id_garage)) {
             throwError('El id_garage es requerido para el rol garagista y debe ser un número válido.', 400);
         }
@@ -413,7 +420,7 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
         if (!isValidId(id_sede)) throwError('El id_sede es requerido y debe ser un número válido.', 400);
     }
 
-    if (!esSuperadmin && !esDuenoGarage && !isValidId(id_empresa)) {
+    if (!esSuperadmin && !esDuenoGarage && !esGaragista && !isValidId(id_empresa)) {
         throwError('El id_empresa es requerido y debe ser un número válido.', 400);
     }
     if (telefono && !isValidPhone(telefono)) throwError('El teléfono debe contener solo dígitos (mínimo 7).', 400);
@@ -429,7 +436,7 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     if (esRequesterAdmin) {
         if (!isValidId(req.usuario.id_empresa)) throwError('Tu usuario no tiene una empresa asociada.', 403);
         req.body.id_empresa = req.usuario.id_empresa;
-        if (req.body.id_sede) {
+        if (!esGaragista && req.body.id_sede) {
             const sede = await svc.sedeService.getByIdAsync(req.body.id_sede, req.usuario);
             if (!sede) throwError('La sede indicada no pertenece a tu organización.', 403);
         }
@@ -460,7 +467,7 @@ router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), asy
 
     const data = await svc.updateAsync(parseInt(id, 10), req.body, req.usuario);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
-    res.status(200).json(data);
+    res.status(200).json(sinContraseña(data));
 });
 
 // UPDATE CONTRASEÑA (PATCH) - admin, smartlot o el propio usuario
@@ -492,7 +499,7 @@ router.patch('/:id/estado', authMiddleware, requireRole(1, 4), async (req, res) 
 
     const data = await svc.updateEstadoAsync(parseInt(id, 10), activo, req.usuario);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
-    res.status(200).json(data);
+    res.status(200).json(sinContraseña(data));
 });
 
 // DELETE - admin o smartlot

@@ -7,6 +7,8 @@
 //
 // Reglas:
 //   - Superadmin (rol 4): ve todos los tenants (condición vacía).
+//   - Dueño de garage o garagista (sin id_empresa/id_sede): solo ve datos de los
+//     garages que tiene asignados en `usuario_garage` (requiere `garageColumn`).
 //   - Usuario con `id_sede`: solo ve datos de su sede (sedeColumn).
 //   - Usuario con `id_empresa`: solo ve datos de su empresa (empresaColumn).
 //   - Usuario sin contexto de tenant: no ve nada (`AND false`).
@@ -44,7 +46,9 @@ export const getTenantCondition = (requestingUser, firstParamIndex, columns) => 
         return { sql: '', params: [] };
     }
 
-    if (requestingUser?.tipo_rol?.toLowerCase() === 'dueño_garage' && columns.garageColumn) {
+    const tipoRol = requestingUser?.tipo_rol?.toLowerCase();
+    const esRolDeGarage = tipoRol === 'dueño_garage' || tipoRol === 'garagista';
+    if (esRolDeGarage && columns.garageColumn) {
         return {
             sql: ` AND EXISTS (SELECT 1 FROM usuario_garage tenant_ug WHERE tenant_ug.id_usuario = $${firstParamIndex} AND tenant_ug.id_garage = ${columns.garageColumn})`,
             params: [Number(requestingUser.id)],

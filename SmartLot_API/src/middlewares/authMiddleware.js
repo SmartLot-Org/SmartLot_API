@@ -24,9 +24,16 @@ const authMiddleware = async (req, res, next) => {
     try {
         const tokenUsuario = jwt.verify(token, process.env.JWT_SECRET);
         const usuarioResult = await pool.query(
-            `SELECT u.id_rol, u.id_empresa, u.id_sede, r.tipo_rol
+            `SELECT u.id_rol, u.id_empresa, u.id_sede, r.tipo_rol,
+                    g.id_garage, COALESCE(g.id_garages, '{}'::int[]) AS id_garages
              FROM usuarios u
              INNER JOIN roles r ON r.id = u.id_rol
+             LEFT JOIN LATERAL (
+                SELECT MIN(ug.id_garage) AS id_garage,
+                       ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                FROM usuario_garage ug
+                WHERE ug.id_usuario = u.id
+             ) g ON true
              WHERE u.id = $1
                AND COALESCE(u.activo, true) = true
                AND COALESCE(u."Borrado", false) = false
@@ -42,6 +49,8 @@ const authMiddleware = async (req, res, next) => {
             id_empresa: usuarioResult.rows[0].id_empresa,
             id_sede: usuarioResult.rows[0].id_sede,
             tipo_rol: usuarioResult.rows[0].tipo_rol,
+            id_garage: usuarioResult.rows[0].id_garage ?? null,
+            id_garages: usuarioResult.rows[0].id_garages ?? [],
         };
         next();
     } catch (error) {
