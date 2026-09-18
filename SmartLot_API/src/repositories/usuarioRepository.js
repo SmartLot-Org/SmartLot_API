@@ -268,6 +268,24 @@ export default class UsuarioRepository {
         } catch (error) { console.error(error); return false; }
     }
 
+    getSuperadminsActivosAsync = async () => {
+        try {
+            const result = await pool.query(
+                `SELECT u.id, u.email, u.nombre, u.apellido
+                  FROM usuarios u
+                  INNER JOIN roles r ON r.id = u.id_rol
+                  WHERE (u.id_rol = 4 OR lower(trim(r.tipo_rol)) = 'superadmin')
+                    AND COALESCE(u.activo, true) = true
+                    AND COALESCE(u."Borrado", false) = false
+                    AND COALESCE(r."Borrado", false) = false`
+            );
+            return result.rows;
+        } catch (error) {
+            console.error('Error en getSuperadminsActivosAsync:', error);
+            return [];
+        }
+    }
+
     invalidatePreviousResetCodesAsync = async (id_usuario) => {
         try {
             await pool.query(

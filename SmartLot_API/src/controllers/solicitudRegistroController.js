@@ -29,6 +29,11 @@ router.get('', authMiddleware, requireRole(4), async (req, res) => {
     res.status(200).json(await svc.getAllAsync(req.query.estado ?? null));
 });
 
+// OBTENER UNA SOLICITUD POR ID (superadmin) - sin contraseña_hash
+router.get('/:id', authMiddleware, requireRole(4), async (req, res) => {
+    res.status(200).json(await svc.getByIdAsync(parseId(req.params.id)));
+});
+
 // APROBAR (superadmin) - crea la empresa y el usuario administrador en una transacción
 router.patch('/:id/aprobar', authMiddleware, requireRole(4), async (req, res) => {
     res.status(200).json(await svc.approveAsync(parseId(req.params.id), req.usuario));

@@ -42,22 +42,24 @@ const baseInput = {
     empresa_descripcion: 'Flota de reparto',
 };
 
-function serviceFixture({ pendingByEmail = false, existingUser = null, rolAdmin = { id: 1, tipo_rol: 'admin' } } = {}) {
+function serviceFixture({ pendingByEmail = false, existingUser = null, rolAdmin = { id: 1, tipo_rol: 'admin' }, superadmins = [{ id: 50, email: 'super@smartlot.ar', nombre: 'Martín', apellido: 'Admin' }] } = {}) {
     const svc = new SolicitudRegistroService();
     let created = null;
     svc.repo = {
         createPendingAsync: async (e) => { created = e; return { id: 7, estado: 'pendiente', ...e }; },
         hasPendingByEmailAsync: async () => pendingByEmail,
-        getAllAsync: async (estado) => [{ id: 1, estado: estado ?? 'pendiente' }],
+        getAllAsync: async (estado) => [{ id: 1, estado: estado ?? 'pendiente', contraseña_hash: 'hash-guardado' }],
+        getByIdAsync: async (id) => ({ id, estado: 'pendiente', contraseña_hash: 'hash-guardado', empresa_nombre: 'Transportes del Sur' }),
         approveAsync: async (id, opts) => ({
             solicitud: { id, estado: 'aceptada', revisada_por: opts.idRevisor },
             empresa: { id: 10, nombre: 'Transportes del Sur' },
             usuario: { id: 20, id_rol: opts.idRolAdmin, email: 'ana@empresa.com', nombre: 'Ana', contraseña: 'hash-guardado' },
         }),
-        rejectAsync: async (id, idRevisor) => ({ id, estado: 'rechazada', revisada_por: idRevisor }),
+        rejectAsync: async (id, idRevisor) => ({ id, estado: 'rechazada', revisada_por: idRevisor, email: 'ana@empresa.com', nombre: 'Ana', apellido: 'Gómez', empresa_nombre: 'Transportes del Sur' }),
     };
-    svc.usuarioRepo = { getByEmailAsync: async () => existingUser };
+    svc.usuarioRepo = { getByEmailAsync: async () => existingUser, getSuperadminsActivosAsync: async () => superadmins };
     svc.rolService = { getByIdAsync: async () => rolAdmin };
+    svc.notificacionService = { crearAsync: async (...args) => ({ args }) };
     return { svc, created: () => created };
 }
 
@@ -264,6 +266,7 @@ test('constantes de estado permiten pendiente -> aceptada/rechazada', () => {
 const repoSource = await readFile(new URL('../src/repositories/solicitudRegistroRepository.js', import.meta.url), 'utf8');
 const controllerSource = await readFile(new URL('../src/controllers/solicitudRegistroController.js', import.meta.url), 'utf8');
 const migrationSource = await readFile(new URL('../migrations/20260909_001_solicitudes_registro.sql', import.meta.url), 'utf8');
+const nuevaMigracionSource = await readFile(new URL('../migrations/20260918_001_email_solicitud_superadmin.sql', import.meta.url), 'utf8');
 test('repositorio parametriza entradas y bloquea la fila al aprobar', () => {
     assert.doesNotMatch(repoSource, /\$\{(?:id|idRevisor|idRolAdmin|email|estado)\}/);
     assert.match(repoSource, /FROM solicitudes_registro WHERE id=\$1 FOR UPDATE/);
@@ -280,4 +283,99 @@ test('migración crea la tabla con unicidad parcial de email pendiente', () => {
     assert.match(migrationSource, /WHERE estado = 'pendiente'/);
     assert.match(migrationSource, /^BEGIN;/m);
     assert.match(migrationSource, /^COMMIT;/m);
+});
+
+// ─── Notificación a superadmins por email ─────────────────────────
+test('crear envía un email a cada superadmin con links de acción al frontend', async () => {
+    const { svc } = serviceFixture({
+        superadmins: [
+            { id: 50, email: 'uno@smartlot.ar', nombre: 'Uno' },
+            { id: 51, email: 'dos@smartlot.ar', nombre: 'Dos' },
+        ]
+    });
+    sends.length = 0;
+    await svc.createAsync(baseInput);
+    assert.equal(sends.length, 2);
+    assert.deepEqual(sends.map((s) => s.to[0].email), ['uno@smartlot.ar', 'dos@smartlot.ar']);
+    for (const mail of sends) {
+        assert.match(mail.subject, /Nueva solicitud de registro/);
+        assert.match(mail.html, /solicitud-registro\/revision\?solicitud=7&(amp;)?accion=aprobar/);
+        assert.match(mail.html, /solicitud-registro\/revision\?solicitud=7&(amp;)?accion=rechazar/);
+        assert.ok(!mail.html.includes('hash-guardado'));
+    }
+});
+
+test('crear notifica in-app a cada superadmin', async () => {
+    const { svc } = serviceFixture();
+    const notificaciones = [];
+    svc.notificacionService = { crearAsync: async (...args) => { notificaciones.push(args); return { id: 1 }; } };
+    await svc.createAsync(baseInput);
+    assert.equal(notificaciones.length, 1);
+    const [idUsuario, mensaje, tipo, actor] = notificaciones[0];
+    assert.equal(idUsuario, 50);
+    assert.match(mensaje, /Ana Gómez/);
+    assert.match(mensaje, /Transportes del Sur/);
+    assert.equal(tipo, 'solicitud_registro');
+    assert.equal(actor, 'Ana Gómez');
+});
+
+test('crear sigue exitoso aunque falle el envío de correos a superadmins', async () => {
+    const { svc, created } = serviceFixture();
+    svc.usuarioRepo.getSuperadminsActivosAsync = async () => [{ id: 50, email: 'uno@smartlot.ar', nombre: 'Uno' }];
+    sends.length = 0;
+    // mailtrap mockeado ya no falla: forzamos fallo con un email inválido en el destinatario
+    svc.usuarioRepo.getSuperadminsActivosAsync = async () => [{ id: 50, email: '', nombre: 'Uno' }];
+    const row = await svc.createAsync(baseInput);
+    assert.equal(row.estado, 'pendiente');
+    assert.equal(created().email, 'ana@empresa.com');
+});
+
+test('crear sigue exitoso si no hay superadmins activos', async () => {
+    const { svc, created } = serviceFixture({ superadmins: [] });
+    sends.length = 0;
+    const row = await svc.createAsync(baseInput);
+    assert.equal(row.estado, 'pendiente');
+    assert.equal(created().email, 'ana@empresa.com');
+    assert.equal(sends.length, 0);
+});
+
+test('rechazar envía email de rechazo al solicitante', async () => {
+    const { svc } = serviceFixture();
+    sends.length = 0;
+    await svc.rejectAsync(7, superadmin);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].to[0].email, 'ana@empresa.com');
+    assert.match(sends[0].subject, /rechazada/i);
+    assert.match(sends[0].html, /Transportes del Sur/);
+    assert.ok(!sends[0].html.includes('hash-guardado'));
+});
+
+test('aprobar no envía email a superadmins, solo bienvenida al nuevo usuario', async () => {
+    const { svc } = serviceFixture();
+    sends.length = 0;
+    await svc.approveAsync(7, superadmin);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].to[0].email, 'ana@empresa.com');
+});
+
+test('listar y obtener por id no exponen contraseña_hash', async () => {
+    const { svc } = serviceFixture();
+    const lista = await svc.getAllAsync('pendiente');
+    assert.equal(lista[0].contraseña_hash, undefined);
+    const una = await svc.getByIdAsync(7);
+    assert.equal(una.contraseña_hash, undefined);
+    assert.equal(una.empresa_nombre, 'Transportes del Sur');
+});
+
+test('nueva migración siembra las dos plantillas sin pisar existentes', () => {
+    assert.match(nuevaMigracionSource, /'solicitud_registro_superadmin'/);
+    assert.match(nuevaMigracionSource, /'solicitud_rechazada'/);
+    assert.match(nuevaMigracionSource, /ON CONFLICT \(codigo\) DO NOTHING/);
+    assert.match(nuevaMigracionSource, /\{\{link_aceptar\}\}/);
+    assert.match(nuevaMigracionSource, /\{\{link_rechazar\}\}/);
+});
+
+test('endpoint GET /:id exige superadmin y se define antes que PATCH', () => {
+    assert.match(controllerSource, /router\.get\('\/:id', authMiddleware, requireRole\(4\)/);
+    assert.ok(controllerSource.indexOf("router.get('/:id'") < controllerSource.indexOf("router.patch('/:id/aprobar'"));
 });

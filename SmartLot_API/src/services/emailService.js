@@ -79,9 +79,10 @@ const header = ({ tagline = 'El estacionamiento del futuro' } = {}) => `
 
 /**
  * Botón de CTA con los colores de marca.
+ * colorFondo: hex opcional (ej. verde para aceptar, rojo para rechazar); por defecto azul de marca.
  */
-const boton = (href, texto) => `
-    <a href="${href}" style="display:inline-block;padding:14px 42px;background-color:${BRAND.blue};color:#ffffff;text-decoration:none;border-radius:10px;font-family:${FONT_BODY};font-weight:600;font-size:15px;box-shadow:0 4px 14px rgba(37,99,235,0.30);">${texto}</a>`;
+const boton = (href, texto, colorFondo = BRAND.blue) => `
+    <a href="${href}" style="display:inline-block;padding:14px 42px;background-color:${colorFondo};color:#ffffff;text-decoration:none;border-radius:10px;font-family:${FONT_BODY};font-weight:600;font-size:15px;box-shadow:0 4px 14px rgba(37,99,235,0.30);">${texto}</a>`;
 
 /**
  * Caja de información: variante 'info' (azul) o 'alerta' (ámbar).
@@ -220,6 +221,61 @@ export const plantillaRecuperoContraseña = (nombre, codigo) => {
     return layout(cuerpo);
 };
 
+/**
+ * Plantilla para superadmins: nueva solicitud de registro de empresa
+ * con botones de Aceptar / Rechazar que llevan a la página de confirmación
+ * del frontend (donde se exige sesión de superadmin).
+ */
+export const plantillaSolicitudRegistroSuperadmin = (v = {}) => {
+    const solicitante = v.solicitante ?? '';
+    const cuerpo = `
+    <div style="padding:36px 32px 32px;background-color:${BRAND.surface};">
+        <h2 style="margin:0 0 16px;font-family:${FONT_DISPLAY};font-weight:800;font-size:22px;color:${BRAND.text};letter-spacing:-0.02em;">Hola, ${v.nombre_superadmin ?? ''}</h2>
+        <p style="margin:0 0 16px;font-family:${FONT_BODY};font-size:15px;line-height:1.7;color:${BRAND.bodyText};">
+            <strong>${solicitante}</strong> quiere registrar la empresa <strong>${v.empresa_nombre ?? ''}</strong> en SmartLot.
+        </p>
+        ${cajaInfo({ lineas: [
+            ['Solicitante', `${solicitante} (${v.email_solicitante ?? ''})`],
+            ['Empresa', v.empresa_nombre ?? ''],
+            ['Descripción', v.empresa_descripcion ?? '—']
+        ] })}
+        <p style="margin:24px 0 16px;font-family:${FONT_BODY};font-size:15px;line-height:1.7;color:${BRAND.bodyText};">
+            Revisá los datos y confirmá tu decisión: se te pedirá iniciar sesión como superadmin.
+        </p>
+        <p style="text-align:center;margin:28px 0 8px;">
+            ${boton(v.link_aceptar ?? FRONTEND_URL, 'Aceptar solicitud', '#16A34A')}
+            <span style="display:inline-block;width:12px;"></span>
+            ${boton(v.link_rechazar ?? FRONTEND_URL, 'Rechazar', '#DC2626')}
+        </p>
+        <p style="text-align:center;margin:20px 0 0;">
+            <a href="${v.link_panel ?? FRONTEND_URL}" style="color:${BRAND.blue};font-family:${FONT_BODY};font-size:13px;">Ver todas las solicitudes en el panel</a>
+        </p>
+        <p style="margin:12px 0 0;font-family:${FONT_BODY};font-size:13px;color:${BRAND.muted};text-align:center;">Por seguridad, la acción se confirma en SmartLot con tu sesión de superadmin.</p>
+    </div>`;
+
+    return layout(cuerpo);
+};
+
+/**
+ * Plantilla de rechazo de solicitud de registro para el solicitante.
+ */
+export const plantillaSolicitudRechazada = (nombre, empresaNombre) => {
+    const cuerpo = `
+    <div style="padding:36px 32px 32px;background-color:${BRAND.surface};">
+        <h2 style="margin:0 0 16px;font-family:${FONT_DISPLAY};font-weight:800;font-size:22px;color:${BRAND.text};letter-spacing:-0.02em;">Hola, ${nombre}</h2>
+        <p style="margin:0 0 16px;font-family:${FONT_BODY};font-size:15px;line-height:1.7;color:${BRAND.bodyText};">
+            Lamentablemente, tu solicitud de registro de la empresa <strong>${empresaNombre}</strong> en SmartLot fue revisada y <strong>rechazada</strong>.
+        </p>
+        ${cajaInfo({
+            lineas: [['', 'Si creés que esto es un error o querés volver a postularte, comunicate con el equipo de SmartLot respondiendo a este correo.']],
+            variante: 'alerta'
+        })}
+        <p style="text-align:center;margin:28px 0 8px;">${boton(`${FRONTEND_URL}/login`, 'Ir a SmartLot')}</p>
+    </div>`;
+
+    return layout(cuerpo);
+};
+
 // ─── Plantillas desde base de datos ───────────────────────────────
 const TPL_CACHE_TTL_MS = 60 * 1000;
 const tplCache = new Map();
@@ -308,6 +364,14 @@ const FALLBACKS = {
     recuperar_contraseña: (v = {}) => ({
         asunto: 'Código de Verificación - SmartLot',
         html: plantillaRecuperoContraseña(v.nombre ?? '', v.codigo ?? '')
+    }),
+    solicitud_registro_superadmin: (v = {}) => ({
+        asunto: 'Nueva solicitud de registro - SmartLot',
+        html: plantillaSolicitudRegistroSuperadmin(v)
+    }),
+    solicitud_rechazada: (v = {}) => ({
+        asunto: 'Tu solicitud de registro fue rechazada - SmartLot',
+        html: plantillaSolicitudRechazada(v.nombre ?? '', v.empresa_nombre ?? '')
     })
 };
 
