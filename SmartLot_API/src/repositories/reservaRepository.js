@@ -2,6 +2,14 @@
 import pool from '../database/db.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
 
+const withoutQrToken = (row) => {
+    if (!row) return row;
+    const { qr_token, ...safeRow } = row;
+    return safeRow;
+};
+
+const withoutQrTokens = (rows) => rows.map(withoutQrToken);
+
 export default class ReservaRepository {
     constructor() {
         console.log('Estoy en: ReservaRepository.constructor()');
@@ -49,7 +57,7 @@ export default class ReservaRepository {
         const importe=Number((tarifa*minutos/60).toFixed(2));
         const snap={id_trato:trato.id,modalidad_pago_aplicada:trato.modalidad_pago,tipo_cupo:tipoCupo,responsable_pago:responsable,tarifa_hora_aplicada:tarifa,importe_estimado:importe,estado_reserva:responsable==='empresa'?'confirmada':'pendiente_pago',retencion_pago_hasta:responsable==='empresa'?null:new Date(Date.now()+600000)};
         if (!insert) return {idTrato:trato.id,modalidadPago:trato.modalidad_pago,tipoCupo,responsablePago:responsable,tipoVehiculo:vehicle.tipo_vehiculo,tarifaHora:tarifa,minutos,importe,requierePago:responsable==='empleado'};
-        return (await client.query(
+        return withoutQrToken((await client.query(
             `INSERT INTO reservas
                 (id_usuario,id_garage,id_vehiculo,fecha_entrada,fecha_salida,entro,salio,dia,
                  id_trato,modalidad_pago_aplicada,tipo_cupo,responsable_pago,
@@ -74,7 +82,7 @@ export default class ReservaRepository {
                 snap.estado_reserva,
                 snap.retencion_pago_hasta,
             ]
-        )).rows[0];
+        )).rows[0]);
     };
 
     getAllAsync = async (requestingUser = null) => {
@@ -87,7 +95,7 @@ export default class ReservaRepository {
                  ORDER BY r.id`,
                 [...tenant.params]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -113,7 +121,7 @@ export default class ReservaRepository {
                   ORDER BY r.fecha_entrada`,
                 [id_garage, fecha, ...tenant.params]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -126,8 +134,30 @@ export default class ReservaRepository {
                  WHERE r.id = $1 AND COALESCE(r."Borrado", false) = false ${tenant.sql}`,
                 [id, ...tenant.params]
             );
-            return result.rows[0] ?? null;
+            return withoutQrToken(result.rows[0] ?? null);
         } catch (error) { console.error(error); return null; }
+    }
+
+    getQrByIdAsync = async (id) => {
+        const result = await pool.query(
+            `SELECT id, id_usuario, fecha_salida, entro, salio, "Borrado", estado_reserva, qr_token
+               FROM reservas
+              WHERE id = $1`,
+            [id]
+        );
+        return result.rows[0] ?? null;
+    }
+
+    getByQrTokenAsync = async (qrToken) => {
+        const result = await pool.query(
+            `SELECT r.id, v.patente
+               FROM reservas r
+               INNER JOIN vehiculos v ON v.id = r.id_vehiculo
+              WHERE r.qr_token = $1::uuid
+                AND COALESCE(r."Borrado", false) = false`,
+            [qrToken]
+        );
+        return result.rows[0] ?? null;
     }
 
     getByIdForUpdateWithClientAsync = async (id, client) => {
@@ -139,7 +169,7 @@ export default class ReservaRepository {
               FOR UPDATE OF r`,
             [id]
         );
-        return result.rows[0] ?? null;
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => {
@@ -153,7 +183,7 @@ export default class ReservaRepository {
                  ORDER BY r.fecha_entrada`,
                 [id_usuario, ...tenant.params]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -195,7 +225,7 @@ export default class ReservaRepository {
                    ORDER BY r.fecha_entrada DESC`,
                 [id_usuario, ...tenant.params]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -209,7 +239,7 @@ export default class ReservaRepository {
                  ORDER BY fecha_entrada`,
                 [id_usuario]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -223,7 +253,7 @@ export default class ReservaRepository {
                  ORDER BY fecha_entrada`,
                 [id_garage]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -239,7 +269,7 @@ export default class ReservaRepository {
                    AND ($4::integer IS NULL OR id != $4)`,
                 [id_vehiculo, fecha_entrada, fecha_salida, excludeId]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -255,7 +285,7 @@ export default class ReservaRepository {
                    AND ($4::integer IS NULL OR id != $4)`,
                 [id_usuario, fecha_entrada, fecha_salida, excludeId]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -271,7 +301,7 @@ export default class ReservaRepository {
                   AND ($4::integer IS NULL OR id != $4)`,
                 [id_garage, fecha_entrada, fecha_salida, excludeId]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -283,7 +313,7 @@ export default class ReservaRepository {
                 [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
                  entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia]
             );
-            return result.rows[0];
+            return withoutQrToken(result.rows[0]);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -295,7 +325,7 @@ export default class ReservaRepository {
                 [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
                  entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia, id]
             );
-            return result.rows[0] ?? null;
+            return withoutQrToken(result.rows[0] ?? null);
         } catch (error) { console.error(error); return null; }
     }
 
@@ -306,7 +336,7 @@ export default class ReservaRepository {
             [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
              entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia]
         );
-        return result.rows[0];
+        return withoutQrToken(result.rows[0]);
     }
 
     cancelarWithClientAsync = async (id, client) => {
@@ -314,7 +344,7 @@ export default class ReservaRepository {
             'UPDATE reservas SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
-        return result.rows[0] ?? null;
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     updateWithClientAsync = async (id, entity, client) => {
@@ -324,7 +354,7 @@ export default class ReservaRepository {
             [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
              entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia, id]
         );
-        return result.rows[0] ?? null;
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     registrarIngresoWithClientAsync = async (id, client) => {
@@ -332,7 +362,7 @@ export default class ReservaRepository {
             'UPDATE reservas SET entro = true WHERE id = $1 AND COALESCE(entro, false) = false AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
-        return result.rows[0] ?? null;
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     getCountByUsuarioAndDateAsync = async (id_usuario, fecha, excludeId = null) => {
@@ -355,7 +385,7 @@ export default class ReservaRepository {
             'UPDATE reservas SET salio = true WHERE id = $1 AND COALESCE(entro, false) = true AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
-        return result.rows[0] ?? null;
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     getOverlapByGarageAndDateAsync = async (id_garage, fecha) => {
@@ -369,7 +399,7 @@ export default class ReservaRepository {
                  ORDER BY fecha_entrada`,
                 [id_garage, fecha]
             );
-            return result.rows;
+            return withoutQrTokens(result.rows);
         } catch (error) { console.error(error); return null; }
     }
 

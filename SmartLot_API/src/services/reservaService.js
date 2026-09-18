@@ -35,6 +35,77 @@ export default class ReservaService {
         return this.repo.getByIdAsync(id, requestingUser);
     };
 
+    getQrAsync = async (id, requestingUser) => {
+        await this.repo.expirePendingAsync(pool, id);
+        const reserva = await this.repo.getQrByIdAsync(id);
+
+        if (!reserva) {
+            const error = new Error(`La reserva con ID ${id} no existe.`);
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (Number(reserva.id_usuario) !== Number(requestingUser?.id)) {
+            const error = new Error('No tiene permisos para obtener el QR de esta reserva.');
+            error.statusCode = 403;
+            throw error;
+        }
+
+        if (reserva.Borrado) {
+            const error = new Error('La reserva esta cancelada o eliminada.');
+            error.statusCode = 409;
+            throw error;
+        }
+
+        if (reserva.estado_reserva !== 'confirmada') {
+            const error = new Error('La reserva no esta confirmada para generar el QR de ingreso.');
+            error.statusCode = 409;
+            throw error;
+        }
+
+        if (reserva.entro) {
+            const error = new Error(`La reserva con ID ${id} ya registro su ingreso.`);
+            error.statusCode = 409;
+            throw error;
+        }
+
+        if (reserva.salio) {
+            const error = new Error(`La reserva con ID ${id} ya fue finalizada.`);
+            error.statusCode = 409;
+            throw error;
+        }
+
+        if (new Date() > new Date(reserva.fecha_salida)) {
+            const error = new Error(`La reserva con ID ${id} ya expiro.`);
+            error.statusCode = 409;
+            throw error;
+        }
+
+        return {
+            id_reserva: reserva.id,
+            qr: `smartlot:${reserva.qr_token}`,
+        };
+    };
+
+    checkInByQrAsync = async (qr, requestingUser) => {
+        const qrPattern = /^smartlot:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+        if (typeof qr !== 'string' || !qrPattern.test(qr)) {
+            const error = new Error('El codigo QR no tiene un formato valido.');
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const qrToken = qrPattern.exec(qr)[1].toLowerCase();
+        const reserva = await this.repo.getByQrTokenAsync(qrToken);
+        if (!reserva) {
+            const error = new Error('No existe una reserva asociada al codigo QR.');
+            error.statusCode = 404;
+            throw error;
+        }
+
+        return this.checkInAsync(reserva.id, reserva.patente, requestingUser);
+    };
+
     getActivasByUsuarioAsync = async (id_usuario) => await this.repo.getActivasByUsuarioAsync(id_usuario);
 
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => await this.repo.getByUsuarioAsync(id_usuario, requestingUser);

@@ -73,6 +73,16 @@ router.get('/usuario/:id_usuario', async (req, res) => {
     res.status(200).json(data);
 });
 
+// GET QR DE RESERVA (solo cliente/empleado titular)
+router.get('/:id/qr', requireRole(2), async (req, res) => {
+    if (!isValidId(req.params.id)) throwError('El ID proporcionado no es valido.', 400);
+    const id = parseInt(req.params.id, 10);
+
+    const data = await svc.getQrAsync(id, req.usuario);
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json(data);
+});
+
 // GET BY ID
 router.get('/:id', async (req, res) => {
     const id = parseInt(req.params.id);
@@ -138,6 +148,12 @@ router.post('/:id/cancel', authMiddleware, requireRole(1, 2, 4), async (req, res
 });
 
 // POST CHECK-IN (admin, smartlot o garagista)
+// Esta ruta estatica debe declararse antes de /:id/check-in.
+router.post('/qr/check-in', requireRole(1, 3, 4), async (req, res) => {
+    const data = await svc.checkInByQrAsync(req.body?.qr, req.usuario);
+    res.status(200).json(data);
+});
+
 router.post('/:id/check-in', authMiddleware, requireRole(1, 3, 4), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
