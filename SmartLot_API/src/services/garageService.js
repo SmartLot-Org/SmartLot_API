@@ -16,7 +16,9 @@ export default class GarageService {
     }
 
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
-    
+
+    getPapeleraAsync = async (requestingUser = null) => await this.repo.getPapeleraAsync(requestingUser);
+
     getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
     getByIdForUpdateWithClientAsync = async (id, client) => await this.repo.getByIdForUpdateWithClientAsync(id, client);

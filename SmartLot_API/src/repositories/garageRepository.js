@@ -39,6 +39,37 @@ export default class GarageRepository {
         } catch (error) { console.error(error); return null; }
     }
 
+    getPapeleraAsync = async (requestingUser = null) => {
+        try {
+            let accessSql = '';
+            const params = [];
+            if (requestingUser && !hasRole(requestingUser, 4, ROLE_NAMES.SUPERADMIN)) {
+                if (hasRole(requestingUser, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.GARAGISTA)) {
+                    params.push(requestingUser?.id);
+                    accessSql = ` AND EXISTS (SELECT 1 FROM usuario_garage ug WHERE ug.id_usuario = $${params.length} AND ug.id_garage = g.id)`;
+                } else {
+                    params.push(requestingUser?.id_empresa);
+                    accessSql = ` AND EXISTS (SELECT 1 FROM trato_empresa_garage teg JOIN sedes ts ON ts.id=teg.id_sede WHERE ts.id_empresa = $${params.length} AND teg.id_garage = g.id`;
+                    if (requestingUser?.id_sede) {
+                        params.push(requestingUser.id_sede);
+                        accessSql += ` AND teg.id_sede = $${params.length}`;
+                    }
+                    accessSql += ' AND COALESCE(teg."Borrado", false) = false)';
+                }
+            }
+            const result = await pool.query(`
+                SELECT g.*, COALESCE(
+                    (SELECT array_agg(gd.dia::text ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage = g.id AND gd.activo = true),
+                    '{}'::text[]
+                ) AS dias
+                FROM garages g
+                WHERE COALESCE(g."Borrado", false) = true ${accessSql}
+                ORDER BY g.id
+            `, params);
+            return result.rows;
+        } catch (error) { console.error(error); return null; }
+    }
+
     getByIdAsync = async (id, requestingUser = null) => {
         try {
             let accessSql = '';

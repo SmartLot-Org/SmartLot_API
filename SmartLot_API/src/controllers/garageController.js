@@ -68,6 +68,14 @@ router.get('/ocupacion_no_reserva/:id', async (req, res) => {
     res.status(200).json(data);
 });
 
+// GET PAPELERA - Garages con soft-delete ("Borrado" = true).
+// Debe registrarse antes de GET /:id para que "papelera" no se interprete como ID.
+router.get('/papelera', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
+    const data = await svc.getPapeleraAsync(req.usuario);
+    if (!data) throwError('Error interno del servidor', 500);
+    res.status(200).json(data);
+});
+
 // GET BY ID
 router.get('/:id', async (req, res) => {
     const id = parseInt(req.params.id);
