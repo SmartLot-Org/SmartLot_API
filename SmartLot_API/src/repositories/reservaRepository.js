@@ -4,7 +4,7 @@ import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 const withoutQrToken = (row) => {
     if (!row) return row;
-    const { qr_token, ...safeRow } = row;
+    const { qr_token, qr_salida_token, ...safeRow } = row;
     return safeRow;
 };
 
@@ -142,7 +142,7 @@ export default class ReservaRepository {
 
     getQrByIdAsync = async (id) => {
         const result = await pool.query(
-            `SELECT id, id_usuario, fecha_salida, entro, salio, "Borrado", estado_reserva, qr_token
+            `SELECT id, id_usuario, fecha_salida, entro, salio, "Borrado", estado_reserva, qr_token, qr_salida_token
                FROM reservas
               WHERE id = $1`,
             [id]
@@ -150,19 +150,20 @@ export default class ReservaRepository {
         return result.rows[0] ?? null;
     }
 
-    getByQrTokenAsync = async (qrToken) => {
-        const result = await pool.query(
+    getByQrTokenAsync = async (qrToken, type = 'ingreso', client = pool) => {
+        const column = type === 'salida' ? 'qr_salida_token' : 'qr_token';
+        const result = await client.query(
             `SELECT r.id, v.patente
                FROM reservas r
                INNER JOIN vehiculos v ON v.id = r.id_vehiculo
-              WHERE r.qr_token = $1::uuid
+              WHERE r.${column} = $1::uuid
                 AND COALESCE(r."Borrado", false) = false`,
             [qrToken]
         );
         return result.rows[0] ?? null;
     }
 
-    getByIdForUpdateWithClientAsync = async (id, client) => {
+    getByIdForUpdateWithClientAsync = async (id, client, includeQrTokens = false) => {
         const result = await client.query(
             `SELECT r.*, v.patente
                FROM reservas r
@@ -171,7 +172,8 @@ export default class ReservaRepository {
               FOR UPDATE OF r`,
             [id]
         );
-        return withoutQrToken(result.rows[0] ?? null);
+        const row = result.rows[0] ?? null;
+        return includeQrTokens ? row : withoutQrToken(row);
     }
 
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => {
@@ -361,7 +363,7 @@ export default class ReservaRepository {
 
     registrarIngresoWithClientAsync = async (id, client) => {
         const result = await client.query(
-            'UPDATE reservas SET entro = true WHERE id = $1 AND COALESCE(entro, false) = false AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
+            'UPDATE reservas SET entro = true, qr_salida_token = gen_random_uuid() WHERE id = $1 AND COALESCE(entro, false) = false AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
         return withoutQrToken(result.rows[0] ?? null);
@@ -384,7 +386,7 @@ export default class ReservaRepository {
 
     registrarSalidaWithClientAsync = async (id, client) => {
         const result = await client.query(
-            'UPDATE reservas SET salio = true WHERE id = $1 AND COALESCE(entro, false) = true AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
+            'UPDATE reservas SET salio = true, qr_salida_token = NULL WHERE id = $1 AND COALESCE(entro, false) = true AND COALESCE(salio, false) = false AND COALESCE("Borrado", false) = false RETURNING *',
             [id]
         );
         return withoutQrToken(result.rows[0] ?? null);

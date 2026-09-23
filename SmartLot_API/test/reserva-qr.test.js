@@ -18,6 +18,8 @@ const [{ default: ReservaService }, { requireRole }] = await Promise.all([
 
 const QR_TOKEN = '0bb648bc-c646-443b-93d3-93f095db861a';
 const QR = `smartlot:${QR_TOKEN}`;
+const EXIT_TOKEN = 'ad67a4bf-e4f8-4f9e-9626-d6c786863936';
+const EXIT_QR = `smartlot:${EXIT_TOKEN}`;
 
 const futureDate = () => new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 
@@ -32,6 +34,7 @@ function qrServiceFixture(overrides = {}) {
     Borrado: false,
     estado_reserva: 'confirmada',
     qr_token: QR_TOKEN,
+    qr_salida_token: null,
     ...overrides,
   };
 
@@ -45,7 +48,7 @@ function qrServiceFixture(overrides = {}) {
 
 function checkInFixture() {
   const svc = new ReservaService();
-  const state = { entered: false, reservationUpdates: 0, garageUpdates: 0, commands: [] };
+  const state = { entered: false, exited: false, exitToken: null, reservationUpdates: 0, garageUpdates: 0, commands: [] };
   const reservation = {
     id: 15,
     id_garage: 8,
@@ -66,19 +69,40 @@ function checkInFixture() {
   poolState.client = client;
 
   svc.repo = {
-    getByQrTokenAsync: async (token) => token === QR_TOKEN
-      ? { id: reservation.id, patente: reservation.patente }
-      : null,
+    expirePendingAsync: async () => 0,
+    getByQrTokenAsync: async (token, type) => (
+      (type === 'ingreso' && token === QR_TOKEN)
+      || (type === 'salida' && token === state.exitToken)
+    ) ? { id: reservation.id, patente: reservation.patente } : null,
     getByIdForUpdateWithClientAsync: async () => ({
       ...reservation,
       entro: state.entered,
+      salio: state.exited,
+      qr_token: QR_TOKEN,
+      qr_salida_token: state.exitToken,
     }),
     registrarIngresoWithClientAsync: async () => {
       if (state.entered) return null;
       state.entered = true;
+      state.exitToken = EXIT_TOKEN;
       state.reservationUpdates += 1;
       return { ...reservation, entro: true };
     },
+    registrarSalidaWithClientAsync: async () => {
+      if (!state.entered || state.exited) return null;
+      state.exited = true;
+      state.exitToken = null;
+      state.reservationUpdates += 1;
+      return { ...reservation, entro: true, salio: true };
+    },
+    getQrByIdAsync: async () => ({
+      ...reservation,
+      id_usuario: 20,
+      entro: state.entered,
+      salio: state.exited,
+      qr_token: QR_TOKEN,
+      qr_salida_token: state.exitToken,
+    }),
   };
   svc.garageService = {
     getByIdAsync: async (id, user) => (
@@ -98,7 +122,12 @@ function checkInFixture() {
       state.garageUpdates += 1;
       return { id: 8, ocupacion_reservas: state.garageUpdates };
     },
+    decrementOcupacionReservasWithClientAsync: async () => {
+      state.garageUpdates -= 1;
+      return { id: 8, ocupacion_reservas: state.garageUpdates };
+    },
   };
+  svc.cuentaCorrienteRepo = { crearConsumoReservaAsync: async () => ({ id: 1 }) };
 
   return { svc, state };
 }
@@ -134,9 +163,30 @@ test('reservas pendientes, canceladas o expiradas no entregan QR', async () => {
   }
 });
 
-test('una reserva que ya ingreso no entrega QR', async () => {
-  const { svc } = qrServiceFixture({ entro: true });
+test('una reserva que ya ingreso entrega el QR de salida y tras salir no entrega QR', async () => {
+  const { svc, reserva } = qrServiceFixture({ entro: true, qr_salida_token: EXIT_TOKEN });
+  assert.deepEqual(await svc.getQrAsync(15, { id: 20, id_rol: 2 }), {
+    id_reserva: 15, qr: EXIT_QR,
+  });
+  reserva.salio = true;
   await assert.rejects(svc.getQrAsync(15, { id: 20, id_rol: 2 }), { statusCode: 409 });
+});
+
+test('ingreso por QR, nuevo QR por GET y salida por QR consumen cada token', async () => {
+  const { svc, state } = checkInFixture();
+  const worker = { id: 30, id_rol: 3, id_garage: 8 };
+  const owner = { id: 20, id_rol: 2 };
+  assert.equal((await svc.getQrAsync(15, owner)).qr, QR);
+  await svc.checkInByQrAsync(QR, worker);
+  assert.equal((await svc.getQrAsync(15, owner)).qr, EXIT_QR);
+  assert.notEqual(EXIT_QR, QR);
+  await assert.rejects(svc.checkOutByQrAsync(QR, worker), { statusCode: 404 });
+  await assert.rejects(svc.checkInByQrAsync(EXIT_QR, worker), { statusCode: 404 });
+  await svc.checkOutByQrAsync(EXIT_QR, worker);
+  await assert.rejects(svc.getQrAsync(15, owner), { statusCode: 409 });
+  await assert.rejects(svc.checkOutByQrAsync(EXIT_QR, worker), { statusCode: 404 });
+  assert.equal(state.garageUpdates, 0);
+  assert.equal(state.reservationUpdates, 2);
 });
 
 test('un QR mal formado devuelve 400 antes de consultar la reserva', async () => {
@@ -229,8 +279,9 @@ test('las rutas QR estan ordenadas y el token no se expone en respuestas general
 
   assert.ok(controller.indexOf("router.post('/qr/check-in'") < controller.indexOf("router.post('/:id/check-in'"));
   assert.match(controller, /router\.get\('\/:id\/qr', requireRole\(2\)/);
-  assert.match(repository, /const \{ qr_token, \.\.\.safeRow \} = row/);
-  assert.match(repository, /WHERE r\.qr_token = \$1::uuid/);
+  assert.match(repository, /const \{ qr_token, qr_salida_token, \.\.\.safeRow \} = row/);
+  assert.match(repository, /WHERE r\.\$\{column\} = \$1::uuid/);
+  assert.ok(controller.indexOf("router.post('/qr/check-out'") < controller.indexOf("router.post('/:id/check-out'"));
 });
 
 test('la migracion genera y completa UUID unicos antes de exigir NOT NULL', async () => {
@@ -245,6 +296,24 @@ test('la migracion genera y completa UUID unicos antes de exigir NOT NULL', asyn
   assert.match(migration, /ALTER COLUMN qr_token SET DEFAULT gen_random_uuid\(\)/i);
   assert.match(migration, /ALTER COLUMN qr_token SET NOT NULL/i);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS uq_reservas_qr_token/i);
+});
+
+test('la migracion de salida cubre reservas dentro y evita reutilizar el token de ingreso', async () => {
+  const migration = await readFile(
+    new URL('../migrations/20260923_001_reservas_qr_salida.sql', import.meta.url), 'utf8',
+  );
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS qr_salida_token uuid/i);
+  assert.match(migration, /SET qr_salida_token = gen_random_uuid\(\)/i);
+  assert.match(migration, /COALESCE\(entro, false\) = true/i);
+  assert.match(migration, /COALESCE\(salio, false\) = false/i);
+  assert.match(migration, /qr_salida_token <> qr_token/i);
+});
+
+test('los cambios de ingreso y salida actualizan el token en el mismo UPDATE', async () => {
+  const repository = await readFile(new URL('../src/repositories/reservaRepository.js', import.meta.url), 'utf8');
+  assert.match(repository, /UPDATE reservas SET entro = true, qr_salida_token = gen_random_uuid\(\)/);
+  assert.match(repository, /UPDATE reservas SET salio = true, qr_salida_token = NULL/);
+  assert.match(repository, /FOR UPDATE OF r/);
 });
 
 test.after(() => mock.restoreAll());

@@ -63,31 +63,32 @@ export default class ReservaService {
             throw error;
         }
 
-        if (reserva.entro) {
-            const error = new Error(`La reserva con ID ${id} ya registro su ingreso.`);
-            error.statusCode = 409;
-            throw error;
-        }
-
         if (reserva.salio) {
             const error = new Error(`La reserva con ID ${id} ya fue finalizada.`);
             error.statusCode = 409;
             throw error;
         }
 
-        if (new Date() > new Date(reserva.fecha_salida)) {
+        if (!reserva.entro && new Date() > new Date(reserva.fecha_salida)) {
             const error = new Error(`La reserva con ID ${id} ya expiro.`);
+            error.statusCode = 409;
+            throw error;
+        }
+
+        const token = reserva.entro ? reserva.qr_salida_token : reserva.qr_token;
+        if (!token) {
+            const error = new Error('La reserva no tiene un QR activo.');
             error.statusCode = 409;
             throw error;
         }
 
         return {
             id_reserva: reserva.id,
-            qr: `smartlot:${reserva.qr_token}`,
+            qr: `smartlot:${token}`,
         };
     };
 
-    checkInByQrAsync = async (qr, requestingUser) => {
+    _parseQrToken = (qr) => {
         const qrPattern = /^smartlot:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
         if (typeof qr !== 'string' || !qrPattern.test(qr)) {
             const error = new Error('El codigo QR no tiene un formato valido.');
@@ -95,15 +96,15 @@ export default class ReservaService {
             throw error;
         }
 
-        const qrToken = qrPattern.exec(qr)[1].toLowerCase();
-        const reserva = await this.repo.getByQrTokenAsync(qrToken);
-        if (!reserva) {
-            const error = new Error('No existe una reserva asociada al codigo QR.');
-            error.statusCode = 404;
-            throw error;
-        }
+        return qrPattern.exec(qr)[1].toLowerCase();
+    };
 
-        return this.checkInAsync(reserva.id, reserva.patente, requestingUser);
+    checkInByQrAsync = async (qr, requestingUser) => {
+        return this.checkInAsync(null, null, requestingUser, this._parseQrToken(qr));
+    };
+
+    checkOutByQrAsync = async (qr, requestingUser) => {
+        return this.checkOutAsync(null, null, requestingUser, this._parseQrToken(qr));
     };
 
     getActivasByUsuarioAsync = async (id_usuario) => await this.repo.getActivasByUsuarioAsync(id_usuario);
@@ -343,13 +344,22 @@ export default class ReservaService {
         }
     }
 
-    checkInAsync = async (id, patente, requestingUser) => {
+    checkInAsync = async (id, patente, requestingUser, qrToken = null) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            const reserva = await this.repo.getByIdForUpdateWithClientAsync(id, client);
+            if (qrToken) {
+                const match = await this.repo.getByQrTokenAsync(qrToken, 'ingreso', client);
+                if (!match) throw Object.assign(new Error('No existe una reserva asociada al codigo QR.'), { statusCode: 404 });
+                id = match.id;
+                patente = match.patente;
+            }
+            const reserva = await this.repo.getByIdForUpdateWithClientAsync(id, client, Boolean(qrToken));
             await this._validarReservaParaAccesoAsync(reserva, id, patente, requestingUser);
+            if (qrToken && reserva.qr_token !== qrToken) {
+                throw Object.assign(new Error('El QR de ingreso ya no es valido.'), { statusCode: 400 });
+            }
 
             if (reserva.entro) {
                 const error = new Error(`La reserva con ID ${id} ya registro su ingreso.`);
@@ -413,13 +423,22 @@ export default class ReservaService {
         }
     }
 
-    checkOutAsync = async (id, patente, requestingUser) => {
+    checkOutAsync = async (id, patente, requestingUser, qrToken = null) => {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            const reserva = await this.repo.getByIdForUpdateWithClientAsync(id, client);
+            if (qrToken) {
+                const match = await this.repo.getByQrTokenAsync(qrToken, 'salida', client);
+                if (!match) throw Object.assign(new Error('No existe una reserva asociada al codigo QR.'), { statusCode: 404 });
+                id = match.id;
+                patente = match.patente;
+            }
+            const reserva = await this.repo.getByIdForUpdateWithClientAsync(id, client, Boolean(qrToken));
             await this._validarReservaParaAccesoAsync(reserva, id, patente, requestingUser);
+            if (qrToken && reserva.qr_salida_token !== qrToken) {
+                throw Object.assign(new Error('El QR de salida ya no es valido.'), { statusCode: 400 });
+            }
 
             if (!reserva.entro) {
                 const error = new Error(`La reserva con ID ${id} no puede registrar salida sin haber registrado su ingreso.`);

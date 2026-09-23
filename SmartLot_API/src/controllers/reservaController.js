@@ -164,6 +164,11 @@ router.post('/:id/check-in', authMiddleware, requireRole(1, 3, 4), async (req, r
 });
 
 // POST CHECK-OUT (admin, smartlot o garagista)
+router.post('/qr/check-out', requireRole(1, 3, 4), async (req, res) => {
+    const data = await svc.checkOutByQrAsync(req.body?.qr, req.usuario);
+    res.status(200).json(data);
+});
+
 router.post('/:id/check-out', authMiddleware, requireRole(1, 3, 4), async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
