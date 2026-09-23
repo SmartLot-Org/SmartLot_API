@@ -394,10 +394,19 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     const esSuperadmin = tipoRol === 'superadmin' || Number(id_rol) === 4;
     const esAdmin = tipoRol === 'admin' || Number(id_rol) === 1;
 
-    // Escalada de privilegios: solo superadmin puede crear admins, superadmins o dueños de garage.
+    // Escalada de privilegios: solo superadmin puede crear cualquier rol.
+    // Excepción: un admin general de empresa (sin sede) puede crear únicamente
+    // administradores de sede (rol 1 con id_sede asignado, de su propia empresa).
     const esRequesterSuperadmin = Number(req.usuario.id_rol) === 4;
-    if (!esRequesterSuperadmin && (esSuperadmin || esAdmin || esDuenoGarage)) {
-        throwError('No tiene permisos para crear usuarios con ese rol.', 403);
+    const esRequesterAdminGeneral = Number(req.usuario.id_rol) === 1 && !req.usuario.id_sede;
+    const sedeAsignada = id_sede !== null && id_sede !== undefined && id_sede !== '';
+    if (!esRequesterSuperadmin) {
+        if (esSuperadmin || esDuenoGarage) {
+            throwError('No tiene permisos para crear usuarios con ese rol.', 403);
+        }
+        if (esAdmin && (!esRequesterAdminGeneral || !sedeAsignada)) {
+            throwError('No tiene permisos para crear usuarios con ese rol.', 403);
+        }
     }
 
     if (esGaragista) {
