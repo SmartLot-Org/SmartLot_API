@@ -147,6 +147,18 @@ router.post('/:id/cancel', authMiddleware, requireRole(1, 2, 4), async (req, res
     res.status(200).json({ message: 'Reserva cancelada exitosamente.' });
 });
 
+// POST LIBERAR RETENCION (admin, smartlot o cliente dueno de la reserva)
+// Suelta el lugar retenido por una reserva pendiente de pago cuando el
+// empleado no concreta el pago, sin la ventana de 30 minutos del cancel.
+router.post('/:id/liberar-retencion', authMiddleware, requireRole(1, 2, 4), async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+
+    const ok = await svc.liberarRetencionAsync(id, req.usuario);
+    if (!ok) throwError('No se pudo liberar la retencion de la reserva.', 500);
+    res.status(200).json({ message: 'El lugar retenido fue liberado.' });
+});
+
 // POST CHECK-IN (admin, smartlot o garagista)
 // Esta ruta estatica debe declararse antes de /:id/check-in.
 router.post('/qr/check-in', requireRole(1, 3, 4), async (req, res) => {

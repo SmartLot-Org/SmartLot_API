@@ -28,6 +28,7 @@ import CuentaCorrienteController from "./controllers/cuentaCorrienteController.j
 import authMiddleware      from "./middlewares/authMiddleware.js"
 import errorHandler       from "./middlewares/errorHandler.js"
 import { requireRole }    from "./middlewares/rolesMiddleware.js"
+import ReservaService     from "./services/reservaService.js"
 
 process.on('unhandledRejection', (reason) => {
     console.error('UNHANDLED REJECTION:', reason);
@@ -105,6 +106,8 @@ app.use(errorHandler);
 const isMainModule = !process.argv[1] || import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMainModule) {
+    // Expiracion periodica de retenciones de pago vencidas (pendiente_pago).
+    new ReservaService().iniciarExpiracionAutomatica();
     const server = app.listen(port, () => {
         console.log("server.js");
         console.log(`Listening on http://localhost:${port}`)

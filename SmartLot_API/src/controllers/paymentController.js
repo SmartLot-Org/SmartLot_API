@@ -142,12 +142,16 @@ async function persistPaymentAndConfirmReservation(paymentData) {
         WHERE r.id=$1 FOR UPDATE OF r`, [idReserva]
     )).rows[0] : null;
     await savePaymentRecord(paymentData, reserva?.id_empresa ?? null, client);
-    if (paymentData.status === 'approved' && reserva) {
+    if (reserva && reserva.estado_reserva === 'pendiente_pago') {
       const amountMatches = Number(paymentData.transaction_amount) === Number(reserva.importe_estimado);
-      if (reserva.estado_reserva === 'pendiente_pago' && new Date(reserva.retencion_pago_hasta) > new Date() &&
+      const retencionVigente = new Date(reserva.retencion_pago_hasta) > new Date();
+      if (paymentData.status === 'approved' && retencionVigente &&
           reserva.responsable_pago === 'empleado' && amountMatches) {
         await client.query(`UPDATE reservas SET estado_reserva='confirmada',retencion_pago_hasta=NULL WHERE id=$1`, [idReserva]);
-      } else if (reserva.estado_reserva === 'pendiente_pago' && new Date(reserva.retencion_pago_hasta) <= new Date()) {
+      } else if (!retencionVigente && (paymentData.status === 'approved' ||
+                 ['rejected', 'cancelled', 'charged_back'].includes(paymentData.status))) {
+        // La retencion ya vencio: un pago aprobado fuera de tiempo o un pago
+        // final negativo no deben seguir ocupando el lugar.
         await client.query(`UPDATE reservas SET estado_reserva='expirada' WHERE id=$1`, [idReserva]);
       }
     }

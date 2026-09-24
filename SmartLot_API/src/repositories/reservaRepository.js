@@ -115,9 +115,10 @@ export default class ReservaRepository {
                    INNER JOIN vehiculos v ON v.id = r.id_vehiculo
                    LEFT JOIN modelos mo ON mo.id = v.id_modelo
                    LEFT JOIN marcas ma ON ma.id = mo.id_marca
-                  WHERE r.id_garage = $1
-                    AND COALESCE(r."Borrado", false) = false
-                    AND (r.fecha_entrada::date = $2::date
+                   WHERE r.id_garage = $1
+                     AND COALESCE(r."Borrado", false) = false
+                     AND r.estado_reserva <> 'expirada'
+                     AND (r.fecha_entrada::date = $2::date
                          OR (COALESCE(r.entro, false) = true AND COALESCE(r.salio, false) = false))
                     ${tenant.sql}
                   ORDER BY r.fecha_entrada`,
@@ -349,6 +350,24 @@ export default class ReservaRepository {
             [id]
         );
         return withoutQrToken(result.rows[0] ?? null);
+    }
+
+    // Libera el lugar retenido por una reserva pendiente de pago (el usuario
+    // abandono el checkout de Mercado Pago o cancelo el pago). Es el mismo
+    // efecto que la expiracion por retencion vencida, pero iniciado por el
+    // usuario y sin esperar el TTL.
+    liberarRetencionWithClientAsync = async (id, client) => {
+        const result = await client.query(
+            `UPDATE reservas
+                SET "Borrado" = true,
+                    retencion_pago_hasta = NULL
+              WHERE id = $1
+                AND estado_reserva = 'pendiente_pago'
+                AND COALESCE("Borrado", false) = false
+              RETURNING id`,
+            [id]
+        );
+        return result.rowCount > 0;
     }
 
     updateWithClientAsync = async (id, entity, client) => {

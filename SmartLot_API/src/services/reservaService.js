@@ -17,6 +17,26 @@ export default class ReservaService {
         this.cuentaCorrienteRepo = new CuentaCorrienteRepository();
     }
 
+    // Barrido periodico: convierte en 'expirada' las reservas pendientes de
+    // pago cuya retencion (10 minutos) ya vencio, aunque nadie vuelva a
+    // consultar cotizaciones ni a crear reservas (la expiracion perezosa
+    // solo corria en quote/create/preferencia y los listados mostraban
+    // retenciones vencidas como si siguieran vigentes).
+    iniciarExpiracionAutomatica = (intervaloMs = 60000) => {
+        const ejecutar = async () => {
+            try {
+                const expiradas = await this.repo.expirePendingAsync(pool);
+                if (expiradas > 0) console.log(`[Reservas] ${expiradas} retenciones de pago expiraron.`);
+            } catch (error) {
+                console.error('[Reservas] No se pudieron expirar retenciones de pago:', error.message);
+            }
+        };
+        void ejecutar();
+        const timer = setInterval(ejecutar, intervaloMs);
+        if (typeof timer.unref === 'function') timer.unref();
+        return timer;
+    }
+
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
 
     getControlAccesoAsync = async (id_garage, fecha, requestingUser) => {
@@ -112,6 +132,9 @@ export default class ReservaService {
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => await this.repo.getByUsuarioAsync(id_usuario, requestingUser);
 
     getByUsuarioWithDetailsAsync = async (id_usuario, requestingUser = null) => {
+        // Refresca las retenciones vencidas para que el listado no muestre
+        // reservas pendientes de pago que ya expiraron.
+        await this.repo.expirePendingAsync(pool);
         const rows = await this.repo.getByUsuarioWithDetailsAsync(id_usuario, requestingUser);
         if (!rows) return null;
 
@@ -334,6 +357,51 @@ export default class ReservaService {
                 }
             }
 
+            await client.query('COMMIT');
+            return true;
+        } catch (error) {
+            try { await client.query('ROLLBACK'); } catch (rollbackError) { console.error('ROLLBACK falló:', rollbackError); }
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    // Libera el lugar retenido por una reserva pendiente de pago (flujo de
+    // Mercado Pago). A diferencia del cancel general, no exige la ventana de
+    // 30 minutos previos a la entrada: la retencion pertenece al flujo de
+    // pago y debe poder soltarse en cualquier momento mientras este vigente;
+    // si no se libera a mano, vence sola por retencion_pago_hasta.
+    liberarRetencionAsync = async (id, requestingUser = null) => {
+        const reserva = await this.repo.getByIdAsync(id);
+        if (!reserva) {
+            const error = new Error(`La reserva con ID ${id} no existe.`);
+            error.statusCode = 404;
+            throw error;
+        }
+        if (requestingUser) {
+            const rol = Number(requestingUser.id_rol);
+            if (rol !== 1 && rol !== 4 && Number(reserva.id_usuario) !== Number(requestingUser.id)) {
+                const error = new Error('No tiene permisos para liberar la retencion de esta reserva.');
+                error.statusCode = 403;
+                throw error;
+            }
+        }
+        if (reserva.estado_reserva !== 'pendiente_pago') {
+            const error = new Error('La reserva no esta pendiente de pago.');
+            error.statusCode = 409;
+            throw error;
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const liberada = await this.repo.liberarRetencionWithClientAsync(id, client);
+            if (!liberada) {
+                const error = new Error('La retencion ya no esta vigente.');
+                error.statusCode = 409;
+                throw error;
+            }
             await client.query('COMMIT');
             return true;
         } catch (error) {
