@@ -27,7 +27,7 @@ export const createPreference = async (items, orderId, backUrls = {}, metadata =
 
   const frontendBase = cleanUrl(process.env.FRONTEND_URL) || 'http://localhost:5173';
   const defaultBackUrls = {
-    success: `${frontendBase}/superadmin/pagos-test`,
+    success: `${frontendBase}/payment/success`,
     failure: `${frontendBase}/payment/failure`,
     pending: `${frontendBase}/payment/pending`
   };

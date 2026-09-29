@@ -32,17 +32,17 @@ function serviceFixture() {
 
 test('admin debe enviar sede y el body no puede falsificar empresa ni estado', async () => {
     await assert.rejects(() => serviceFixture().createAsync({ id_garage: 5, cantidad_cocheras: 2 }, admin), { statusCode: 400 });
-    const row = await serviceFixture().createAsync({ id_empresa: 999, id_sede: 7, id_garage: 5, cantidad_cocheras: 2, estado: 'aceptada' }, admin);
+    const row = await serviceFixture().createAsync({ id_empresa: 999, id_sede: 7, id_garage: 5, cantidad_cocheras: 2, estado: 'aceptada', modalidad_pago: 'empresa_cubre_cupo' }, admin);
     assert.deepEqual([row.id_sede, row.id_empresa_autorizada, row.estado], [7, 10, 'pendiente']);
 });
 test('admin limitado a sede no puede usar otra', async () => {
-    await assert.rejects(() => serviceFixture().createAsync({ id_sede: 8, id_garage: 5, cantidad_cocheras: 2 }, adminSede), { statusCode: 403 });
+    await assert.rejects(() => serviceFixture().createAsync({ id_sede: 8, id_garage: 5, cantidad_cocheras: 2, modalidad_pago: 'empresa_cubre_cupo' }, adminSede), { statusCode: 403 });
 });
 test('descripcion opcional se recorta y valida longitud/tipo', async () => {
     const svc = serviceFixture();
-    assert.equal((await svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: ' hola ' }, admin)).descripcion, 'hola');
-    await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: 2 }, admin), { statusCode: 400 });
-    await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: 'x'.repeat(1001) }, admin), { statusCode: 400 });
+    assert.equal((await svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: ' hola ', modalidad_pago: 'empresa_cubre_cupo' }, admin)).descripcion, 'hola');
+    await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: 2, modalidad_pago: 'empresa_cubre_cupo' }, admin), { statusCode: 400 });
+    await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: 1, descripcion: 'x'.repeat(1001), modalidad_pago: 'empresa_cubre_cupo' }, admin), { statusCode: 400 });
 });
 for (const cantidad of [0, -1, 1.5]) test(`rechaza cantidad inválida ${cantidad}`, async () => {
     await assert.rejects(() => serviceFixture().createAsync({ id_sede: 7, id_garage: 5, cantidad_cocheras: cantidad }, admin), { statusCode: 400 });
@@ -76,7 +76,7 @@ class FakeClient {
     release() { this.released = true; }
 }
 const command = (client, value) => client.commands.some(c => c.sql === value);
-const baseRequest = { id: 1, id_sede: 7, id_garage: 5, cantidad_cocheras: 3, estado: 'pendiente', descripcion: 'x' };
+const baseRequest = { id: 1, id_sede: 7, id_garage: 5, cantidad_cocheras: 3, estado: 'pendiente', descripcion: 'x', tipo_solicitud: 'nueva', modalidad_pago: 'empresa_cubre_cupo' };
 const baseGarage = { id: 5, capacidad: 10, estado: true, Borrado: false, precio_auto: 100, precio_moto: 50, precio_pickup: 150 };
 
 function acceptanceFixture({ request = baseRequest, garage = baseGarage, owns = true, deal = null, used = 2, createError = null, updateCount = 1 } = {}) {
@@ -108,7 +108,7 @@ test('aceptar crea exactamente un trato con sede, garage, cantidad y precios, si
     const fx = acceptanceFixture();
     const result = await fx.repo.acceptAsync(1, owner.id);
     assert.equal(fx.created(), 1);
-    assert.deepEqual(result.trato, { id: 8, id_sede: 7, id_garage: 5, cantidad_cocheras: 3, precio_auto: 100, precio_moto: 50, precio_pickup: 150 });
+    assert.deepEqual(result.trato, { id: 8, id_sede: 7, id_garage: 5, cantidad_cocheras: 3, precio_auto: 100, precio_moto: 50, precio_pickup: 150, modalidad_pago: 'empresa_cubre_cupo' });
     assert.ok(command(fx.client, 'BEGIN') && command(fx.client, 'COMMIT'));
 });
 test('dueño no acepta solicitud de garage ajeno', async () => {

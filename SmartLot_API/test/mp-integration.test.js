@@ -130,7 +130,7 @@ test('webhook HTTP con firma valida pero pago inexistente marca el evento con er
     .set('x-request-id', requestId)
     .send({ id: eventId, type: 'payment.updated', data: { id: '999999' } });
 
-  assert.equal(res.status, 500);
+  assert.equal(res.status, 404);
 
   const evento = await pool.query('SELECT procesado, error_procesamiento FROM webhook_eventos WHERE mp_event_id = $1', [eventId]);
   assert.equal(evento.rows.length, 1);

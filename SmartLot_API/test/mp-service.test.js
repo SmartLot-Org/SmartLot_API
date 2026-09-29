@@ -41,6 +41,8 @@ function computeSignature(dataId, requestId, ts, secret) {
 test('createPreference normaliza items y arma el body completo', async () => {
   delete process.env.MP_AUTO_RETURN;
   delete process.env.MP_SANDBOX;
+  const originalFrontend = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = 'https://front.example';
   const result = await createPreference(
     [{ id: 5, title: 'Reserva garage', unit_price: 1500, quantity: 2 }],
     'ORD-42'
@@ -51,8 +53,10 @@ test('createPreference normaliza items y arma el body completo', async () => {
   assert.equal(body.external_reference, 'ORD-42');
   assert.deepEqual(body.items, [{ id: 5, title: 'Reserva garage', description: '', quantity: 2, unit_price: 1500, currency_id: 'ARS' }]);
   assert.equal(Object.hasOwn(body, 'auto_return'), false);
-  assert.equal(body.back_urls.success, `${process.env.FRONTEND_URL}/payment/success`);
+  assert.equal(body.back_urls.success, 'https://front.example/payment/success');
   assert.equal(Object.hasOwn(body, 'notification_url'), false, 'no debe mandar notification_url cuando BACKEND_URL es localhost');
+  if (originalFrontend === undefined) delete process.env.FRONTEND_URL;
+  else process.env.FRONTEND_URL = originalFrontend;
 });
 
 test('createPreference incluye notification_url solo cuando BACKEND_URL es publica', async () => {
@@ -75,10 +79,14 @@ test('isSandbox lee MP_SANDBOX como flag', () => {
 });
 
 test('createPreference incluye auto_return solo si MP_AUTO_RETURN esta configurado', async () => {
+  const originalFrontend = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = 'https://front.example';
   process.env.MP_AUTO_RETURN = 'approved';
   await createPreference([{ title: 'x', unit_price: 100 }], 'ORD-1');
   assert.equal(calls.preference[0].auto_return, 'approved');
   delete process.env.MP_AUTO_RETURN;
+  if (originalFrontend === undefined) delete process.env.FRONTEND_URL;
+  else process.env.FRONTEND_URL = originalFrontend;
 });
 
 test('createPreference admite campos alternativos (monto) y back_urls custom', async () => {

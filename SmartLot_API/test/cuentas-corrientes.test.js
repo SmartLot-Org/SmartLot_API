@@ -46,18 +46,18 @@ test('rechaza filtros inválidos', async () => {
 test('dueño agrupa por empresa y el repositorio recibe exclusivamente su usuario autenticado', async () => {
   const service = new CuentaCorrienteService();
   let received;
-  service.repo = { getDuenoAsync: async (filters) => { received = filters; return [{ ...rows[0], id_empresa: 5, empresa: 'SmartLot' }]; } };
+  service.repo = { getDuenoAsync: async (filters) => { received = filters; return [{ ...rows[0], id_empresa: 5, empresa: 'SmartLot', responsable_pago: 'empresa' }]; } };
   const result = await service.getDuenoAsync({ periodo: '2026-08', id_garage: '26', id_usuario: '999' }, { id: 30, tipo_rol: 'dueño_garage' });
   assert.equal(received.idUsuario, 30);
   assert.equal(result.items[0].empresa, 'SmartLot');
-  assert.deepEqual(result.summary, { reservasUtilizadas: 1, minutosTotales: 60, importeGenerado: 3200 });
+  assert.deepEqual(result.summary, { reservasUtilizadas: 1, minutosTotales: 60, importeGenerado: 3200, importeEmpresas: 3200, importeEmpleados: 0 });
 });
 
 const repositorySource = await readFile(new URL('../src/repositories/cuentaCorrienteRepository.js', import.meta.url), 'utf8');
 const controllerSource = await readFile(new URL('../src/controllers/cuentaCorrienteController.js', import.meta.url), 'utf8');
 test('la creación exige reserva completa, usa tipo explícito y es idempotente', () => {
   assert.match(repositorySource, /r\.entro = true[\s\S]*r\.salio = true[\s\S]*COALESCE\(r\."Borrado", false\) = false/);
-  assert.match(repositorySource, /CASE v\.tipo_vehiculo::text[\s\S]*precio_auto[\s\S]*precio_moto[\s\S]*precio_pickup/);
+  assert.match(repositorySource, /v\.tipo_vehiculo[\s\S]*r\.tarifa_hora_aplicada/);
   assert.match(repositorySource, /ON CONFLICT \(id_reserva\) DO NOTHING/);
   assert.match(repositorySource, /ROUND\(tarifa_hora_aplicada \* minutos_facturados \/ 60\.0, 2\)/);
   assert.match(repositorySource, /EXISTS \([\s\S]*FROM usuario_garage ug[\s\S]*ug\.id_usuario = \$1[\s\S]*ug\.id_garage = c\.id_garage/);

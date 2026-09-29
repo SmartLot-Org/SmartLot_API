@@ -85,10 +85,14 @@ test('mismo garage admite sedes distintas pero no duplica sede + garage', async 
   await assert.rejects(() => svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin), { statusCode: 409 });
 });
 test('admin solo puede cambiar cantidad, no empresa, garage ni precio', async () => {
-  const { svc } = tratoService();
+  const { svc, rows } = tratoService();
+  let received = null;
+  svc.solicitudService = { createModificationAsync: async (input) => { received = input; return { id: 900, tipo_solicitud: 'modificacion', ...input }; } };
   const row = await svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
-  const changed = await svc.updateAsync(row.id, { cantidad_cocheras: 2, id_empresa: 9, id_garage: 9, precio_auto: 1 }, admin);
-  assert.deepEqual([changed.cantidad_cocheras, changed.id_empresa, changed.id_garage, changed.precio_auto], [2, 1, 3, 100]);
+  const result = await svc.updateAsync(row.id, { cantidad_cocheras: 2, id_empresa: 9, id_garage: 9, precio_auto: 1 }, admin);
+  assert.deepEqual(received, { id_trato: row.id, cantidad_cocheras: 2, descripcion: null });
+  assert.equal(result.tipo, 'solicitud_modificacion');
+  assert.deepEqual([rows[0].cantidad_cocheras, rows[0].id_empresa, rows[0].id_garage, rows[0].precio_auto], [1, 1, 3, 100]);
 });
 
 const controller = await readFile(new URL('../src/controllers/garageController.js', import.meta.url), 'utf8');
