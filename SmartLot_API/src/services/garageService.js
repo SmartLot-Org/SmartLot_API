@@ -77,6 +77,104 @@ export default class GarageService {
         }
     }
 
+    createPropioAsync = async (entity, usuario) => {
+        const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
+        const esSuperadmin = hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN);
+        if (!esSuperadmin && !hasRole(usuario, 1, ROLE_NAMES.ADMIN)) {
+            fail('Solo un administrador puede crear un garage propio.', 403);
+        }
+
+        const idSede = Number(entity?.id_sede);
+        if (!Number.isInteger(idSede) || idSede <= 0) fail('id_sede debe ser un entero positivo.');
+
+        const sede = await this.sedeService.getByIdAsync(idSede, usuario);
+        if (!sede) fail('La sede no existe o no tienes permisos sobre ella.', 404);
+        if (!esSuperadmin) {
+            if (Number(sede.id_empresa) !== Number(usuario?.id_empresa)) {
+                fail('La sede no pertenece a tu empresa.', 403);
+            }
+            if (usuario?.id_sede && Number(usuario.id_sede) !== Number(sede.id)) {
+                fail('No puedes crear un garage propio para otra sede.', 403);
+            }
+        }
+        if (typeof sede.ubicacion !== 'string' || !sede.ubicacion.trim()) {
+            fail('La sede debe tener una dirección registrada para crear su garage propio.', 409);
+        }
+
+        const capacidadReservas = Number(entity.capacidad_reservas);
+        const capacidadNoReservas = Number(entity.capacidad_para_no_reservas);
+        if (!Number.isInteger(capacidadReservas) || capacidadReservas < 1 || capacidadReservas > 32767) {
+            fail('La capacidad de reservas debe ser un entero entre 1 y 32767.');
+        }
+        if (!Number.isInteger(capacidadNoReservas) || capacidadNoReservas < 0) {
+            fail('La capacidad para no reservas debe ser un entero mayor o igual a 0.');
+        }
+
+        const garageData = {
+            nombre: String(entity.nombre || '').trim(),
+            piso: entity.piso,
+            ubicacion: sede.ubicacion,
+            latitud: sede.latitud ?? null,
+            longitud: sede.longitud ?? null,
+            estado: true,
+            capacidad: capacidadReservas + capacidadNoReservas,
+            capacidad_reservas: capacidadReservas,
+            capacidad_para_no_reservas: capacidadNoReservas,
+            hora_apertura: entity.hora_apertura,
+            hora_cierre: entity.hora_cierre,
+            precio_pickup: entity.precio_pickup ?? null,
+            precio_auto: entity.precio_auto ?? null,
+            precio_moto: entity.precio_moto ?? null,
+            dias: entity.dias,
+            id_sede_propia: sede.id,
+        };
+        if (!garageData.nombre) fail('El nombre es requerido.');
+
+        this._validarPrecios(garageData);
+        for (const [campo, precio] of Object.entries({
+            precio_pickup: garageData.precio_pickup,
+            precio_auto: garageData.precio_auto,
+            precio_moto: garageData.precio_moto,
+        })) {
+            if (precio !== null && precio !== undefined && !Number.isInteger(precio)) {
+                fail(`${campo} debe expresarse en pesos enteros.`);
+            }
+        }
+        this._validarDiasGarage(garageData);
+        await this._validarRelacionesAsync(garageData);
+
+        if (await this.repo.getPropioBySedeAsync(idSede)) {
+            fail('Esta sede ya tiene un garage propio.', 409);
+        }
+
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const garage = await this.repo.createPropioWithClientAsync(garageData, client);
+            await client.query(
+                `INSERT INTO trato_empresa_garage
+                    (id_sede,id_garage,cantidad_cocheras,precio_pickup,precio_auto,precio_moto,modalidad_pago)
+                 VALUES ($1,$2,$3,$4,$5,$6,'empresa_cubre_cupo')`,
+                [
+                    sede.id,
+                    garage.id,
+                    capacidadReservas,
+                    Number(garage.precio_pickup ?? 0),
+                    Number(garage.precio_auto ?? 0),
+                    Number(garage.precio_moto ?? 0),
+                ]
+            );
+            await client.query('COMMIT');
+            return garage;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            if (error.code === '23505') fail('Esta sede ya tiene un garage propio.', 409);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     updateAsync = async (id, entity) => {
         const actual = await this.repo.getByIdAsync(id);
         if (!actual) return null;

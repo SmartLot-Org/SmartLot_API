@@ -51,6 +51,9 @@ export default class SolicitudEmpresaGarageRepository {
                 'SELECT * FROM garages WHERE id=$1 FOR UPDATE', [entity.id_garage]
             )).rows[0];
             if (!garage || garage.Borrado === true) fail('El garage no existe.', 404);
+            if (garage.id_sede_propia !== null && garage.id_sede_propia !== undefined) {
+                fail('El garage propio de una sede no acepta solicitudes.', 409);
+            }
             if (garage.estado === false) fail('El garage no esta activo.', 409);
             if (entity.tipo_solicitud !== 'modificacion' && await this.tratoRepo.getBySedeGarageWithClientAsync(entity.id_sede, entity.id_garage, client)) {
                 fail('Ya existe un trato entre la sede y el garage.', 409);
@@ -120,6 +123,9 @@ export default class SolicitudEmpresaGarageRepository {
                 'SELECT * FROM garages WHERE id=$1 AND COALESCE("Borrado",false)=false FOR UPDATE', [solicitud.id_garage]
             )).rows[0];
             if (!garage) fail('El garage no existe.', 404);
+            if (garage.id_sede_propia !== null && garage.id_sede_propia !== undefined) {
+                fail('El garage propio de una sede no admite solicitudes de trato.', 409);
+            }
             if (garage.estado === false) fail('El garage no esta activo.', 409);
             if (await this.tratoRepo.getBySedeGarageWithClientAsync(solicitud.id_sede, solicitud.id_garage, client)) {
                 fail('Ya existe un trato entre la sede y el garage.', 409);

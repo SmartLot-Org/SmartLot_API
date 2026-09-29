@@ -16,14 +16,16 @@ test('la entidad y las escrituras de garages no dependen de id_sede', async () =
   for (const statement of writes) assert.doesNotMatch(statement, /\bid_sede\b/);
 });
 
-test('el controller ignora id_sede en altas y ediciones y exige una sede de referencia para distancia', async () => {
+test('las altas y ediciones generales ignoran id_sede y el garage propio usa una sede explícita', async () => {
   const controller = await read('../src/controllers/garageController.js');
-  const createAndUpdate = controller.slice(controller.indexOf('// CREATE (POST)'), controller.indexOf('// GET DIAS BY GARAGE ID'));
+  const create = controller.slice(controller.indexOf('// CREATE (POST)'), controller.indexOf('// CREATE GARAGE PROPIO'));
+  const update = controller.slice(controller.indexOf('// UPDATE (PUT)'), controller.indexOf('// GET DIAS BY GARAGE ID'));
 
-  assert.doesNotMatch(createAndUpdate, /\bid_sede\b/);
+  assert.doesNotMatch(`${create}\n${update}`, /\bid_sede\b/);
+  assert.match(controller, /router\.post\('\/propio'[\s\S]*id_sede/);
   assert.match(controller, /req\.query\.sede_id \?\? req\.usuario\?\.id_sede/);
   assert.match(controller, /sedeService\.getByIdAsync\(sedeId, req\.usuario\)/);
-  assert.doesNotMatch(controller, /garage\.id_sede/);
+  assert.doesNotMatch(controller, /garage\.id_sede\b/);
 });
 
 test('la migracion local elimina solo la FK y la columna sin CASCADE ni borrado', async () => {

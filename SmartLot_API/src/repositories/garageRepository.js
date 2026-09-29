@@ -119,6 +119,16 @@ export default class GarageRepository {
         } catch (error) { console.error(error); return null; }
     }
 
+    getPropioBySedeAsync = async (idSede) => {
+        const result = await pool.query(
+            `SELECT * FROM garages
+             WHERE id_sede_propia = $1 AND COALESCE("Borrado", false) = false
+             LIMIT 1`,
+            [idSede]
+        );
+        return result.rows[0] ?? null;
+    }
+
     createAsync = async (entity) => {
         try {
             const result = await pool.query(
@@ -153,6 +163,28 @@ export default class GarageRepository {
              entity.longitud ?? null, entity.estado ?? true, entity.capacidad, entity.capacidad_para_no_reservas ?? null,
              entity.capacidad_reservas ?? null, entity.hora_apertura ?? null, entity.hora_cierre ?? null,
              entity.precio_pickup ?? null, entity.precio_auto ?? null, entity.precio_moto ?? null]
+        );
+        const garage = result.rows[0];
+        for (const dia of getDiasSemana()) {
+            await client.query(
+                'INSERT INTO garage_dias (id_garage, dia, activo) VALUES ($1,$2,$3) ON CONFLICT (id_garage,dia) DO UPDATE SET activo=$3',
+                [garage.id, dia, entity.dias.includes(dia)]
+            );
+        }
+        return garage;
+    };
+
+    createPropioWithClientAsync = async (entity, client) => {
+        const result = await client.query(
+            `INSERT INTO garages (nombre, piso, ubicacion, latitud, longitud, estado, capacidad,
+                capacidad_para_no_reservas, capacidad_reservas, ocupacion_reservas, ocupacion_no_reservas,
+                hora_apertura, hora_cierre, precio_pickup, precio_auto, precio_moto, id_sede_propia)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,$10,$11,$12,$13,$14,$15) RETURNING *`,
+            [entity.nombre, entity.piso, entity.ubicacion, entity.latitud ?? null,
+             entity.longitud ?? null, entity.estado ?? true, entity.capacidad,
+             entity.capacidad_para_no_reservas, entity.capacidad_reservas,
+             entity.hora_apertura, entity.hora_cierre, entity.precio_pickup ?? null,
+             entity.precio_auto ?? null, entity.precio_moto ?? null, entity.id_sede_propia]
         );
         const garage = result.rows[0];
         for (const dia of getDiasSemana()) {
@@ -381,6 +413,7 @@ export default class GarageRepository {
                   AND g.longitud IS NOT NULL
                   AND g.estado IS DISTINCT FROM false
                   AND COALESCE("Borrado", false) = false
+                  AND g.id_sede_propia IS NULL
                   AND (
                     6371 * acos(
                         cos(radians($1)) * cos(radians(latitud)) *

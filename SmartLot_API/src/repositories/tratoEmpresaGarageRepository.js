@@ -3,7 +3,7 @@ import pool from '../database/db.js';
 const DETAIL_SELECT = `
   SELECT t.*, s.id_empresa AS id_empresa, e.nombre AS empresa_nombre,
     s.nombre AS sede_nombre, s.ubicacion AS sede_ubicacion,
-    g.nombre AS garage_nombre, g.ubicacion AS garage_ubicacion, g.capacidad,
+    g.nombre AS garage_nombre, g.ubicacion AS garage_ubicacion, g.capacidad, g.id_sede_propia,
     g.estado AS garage_estado, g.hora_apertura, g.hora_cierre,
     COALESCE((SELECT array_agg(gd.dia::text ORDER BY gd.dia) FROM garage_dias gd WHERE gd.id_garage=g.id AND gd.activo=true), '{}'::text[]) AS dias
   FROM trato_empresa_garage t
@@ -98,6 +98,9 @@ export default class TratoEmpresaGarageRepository {
                 'SELECT * FROM garages WHERE id=$1 AND COALESCE("Borrado",false)=false FOR UPDATE', [entity.id_garage]
             )).rows[0];
             if (!garage) throw Object.assign(new Error('El garage no existe.'), { statusCode: 404 });
+            if (garage.id_sede_propia !== null && garage.id_sede_propia !== undefined) {
+                throw Object.assign(new Error('El garage propio de una sede no admite tratos adicionales.'), { statusCode: 409 });
+            }
             const occupied = Number((await client.query(
                 'SELECT COALESCE(SUM(cantidad_cocheras),0) AS total FROM trato_empresa_garage WHERE id_garage=$1 AND COALESCE("Borrado", false)=false', [entity.id_garage]
             )).rows[0].total);

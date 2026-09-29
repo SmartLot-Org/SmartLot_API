@@ -99,8 +99,9 @@ const controller = await readFile(new URL('../src/controllers/garageController.j
 const repository = await readFile(new URL('../src/repositories/garageRepository.js', import.meta.url), 'utf8');
 const tratoRepo = await readFile(new URL('../src/repositories/tratoEmpresaGarageRepository.js', import.meta.url), 'utf8');
 const tratoController = await readFile(new URL('../src/controllers/tratoEmpresaGarageController.js', import.meta.url), 'utf8');
-test('admin no puede crear, editar ni eliminar garage físico y cercanos está antes de /:id', () => {
+test('el alta general sigue restringida y el admin solo tiene el endpoint de garage propio', () => {
   assert.match(controller, /post\('', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
+  assert.match(controller, /post\('\/propio', requireRole\(1, 4, ROLE_NAMES\.ADMIN, ROLE_NAMES\.SUPERADMIN\)/);
   assert.match(controller, /put\('\/:id', requireRole\(4, ROLE_NAMES\.DUENO_GARAGE/);
   assert.ok(controller.indexOf("get('/cercanos'") < controller.indexOf("get('/:id'"));
 });
@@ -140,4 +141,11 @@ test('cancelar trato expone PATCH y mantiene DELETE como alias lógico', () => {
   assert.match(tratoController, /patch\('\/:id\/cancelar'/);
   assert.match(tratoController, /svc\.cancelAsync/);
   assert.doesNotMatch(tratoController, /svc\.deleteAsync/);
+});
+test('garage propio no permite cambiar el cupo del trato ni cancelar su vínculo', async () => {
+  const { svc, rows } = tratoService();
+  const row = await svc.createAsync({ id_sede: 7, id_garage: 3, cantidad_cocheras: 1 }, superadmin);
+  rows[0].id_sede_propia = 7;
+  await assert.rejects(() => svc.updateAsync(row.id, { cantidad_cocheras: 2 }, admin), { statusCode: 409 });
+  await assert.rejects(() => svc.cancelAsync(row.id, admin), { statusCode: 409 });
 });

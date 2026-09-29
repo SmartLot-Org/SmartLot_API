@@ -163,9 +163,10 @@ test('crear bloquea garage y fuerza enum pendiente', async () => {
     const fx = createFixture(); const row = await fx.repo.createPendingAsync(createEntity);
     assert.equal(row.estado, 'pendiente'); assert.ok(fx.client.commands.some(c => /garages WHERE id=\$1 FOR UPDATE/.test(c.sql)));
 });
-test('crear rechaza garage inexistente, borrado o cerrado', async () => {
+test('crear rechaza garage inexistente, borrado, propio o cerrado', async () => {
     await assert.rejects(() => createFixture({ garage: null }).repo.createPendingAsync(createEntity), { statusCode: 404 });
     await assert.rejects(() => createFixture({ garage: { ...baseGarage, Borrado: true } }).repo.createPendingAsync(createEntity), { statusCode: 404 });
+    await assert.rejects(() => createFixture({ garage: { ...baseGarage, id_sede_propia: 7 } }).repo.createPendingAsync(createEntity), { statusCode: 409 });
     await assert.rejects(() => createFixture({ garage: { ...baseGarage, estado: false } }).repo.createPendingAsync(createEntity), { statusCode: 409 });
 });
 test('crear rechaza pendiente duplicada, trato existente y sobreasignación', async () => {

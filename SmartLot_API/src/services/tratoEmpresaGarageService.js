@@ -100,6 +100,9 @@ export default class TratoEmpresaGarageService {
 
     updateAsync = async (id, changes, usuario) => {
         const current = await this.getByIdAsync(id, usuario);
+        if (current.id_sede_propia !== null && current.id_sede_propia !== undefined) {
+            fail('La cantidad de cocheras del garage propio se define en su capacidad de reservas.', 409);
+        }
         if (!this._adminCanManage(usuario, current)) fail('No puede modificar este trato.', 403);
         const cantidad = Number(changes.cantidad_cocheras);
         if (!Number.isInteger(cantidad) || cantidad <= 0) fail('cantidad_cocheras debe un entero mayor que 0.', 400);
@@ -137,6 +140,9 @@ export default class TratoEmpresaGarageService {
     };
     cancelAsync = async (id, usuario) => {
         const current = await this.getByIdAsync(id, usuario);
+        if (current.id_sede_propia !== null && current.id_sede_propia !== undefined) {
+            fail('El garage propio debe permanecer vinculado a su sede.', 409);
+        }
         if (!this._adminCanManage(usuario, current)) fail('No puede cancelar este trato.', 403);
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {

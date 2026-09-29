@@ -173,6 +173,59 @@ router.post('', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), 
     res.status(201).json(data);
 });
 
+// CREATE GARAGE PROPIO (POST) - Garage de empresa asociado exclusivamente a una sede.
+router.post('/propio', requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), async (req, res) => {
+    const {
+        id_sede, nombre, piso, hora_apertura, hora_cierre, dias,
+        capacidad_reservas, capacidad_para_no_reservas,
+        precio_pickup, precio_auto, precio_moto,
+    } = req.body;
+
+    if (!isValidId(id_sede)) throwError('id_sede es requerido y debe ser un entero positivo.', 400);
+    if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
+    if (piso === undefined || piso === null || String(piso).trim() === '' || !Number.isInteger(Number(piso))) {
+        throwError('El nivel o planta debe ser un número entero.', 400);
+    }
+    if (!isValidTime(hora_apertura)) throwError('La hora de apertura debe tener formato HH:MM.', 400);
+    if (!isValidTime(hora_cierre)) throwError('La hora de cierre debe tener formato HH:MM.', 400);
+    if (hora_apertura >= hora_cierre) throwError('La hora de apertura debe ser anterior a la hora de cierre.', 400);
+    if (!Array.isArray(dias) || dias.length === 0) throwError('Debe proporcionar al menos un día disponible para el garage.', 400);
+    for (const dia of dias) {
+        if (!isValidDiaSemana(dia)) throwError(`El día "${dia}" no es válido.`, 400);
+    }
+
+    const capacidadReservas = Number(capacidad_reservas);
+    const capacidadNoReservas = Number(capacidad_para_no_reservas);
+    if (!Number.isInteger(capacidadReservas) || capacidadReservas < 1 || capacidadReservas > 32767) {
+        throwError('La capacidad de reservas debe ser un entero entre 1 y 32767.', 400);
+    }
+    if (!Number.isInteger(capacidadNoReservas) || capacidadNoReservas < 0) {
+        throwError('La capacidad para no reservas debe ser un entero mayor o igual a 0.', 400);
+    }
+    validatePrices({ precio_pickup, precio_auto, precio_moto });
+    for (const [campo, precio] of Object.entries({ precio_pickup, precio_auto, precio_moto })) {
+        if (precio !== undefined && precio !== null && !Number.isInteger(precio)) {
+            throwError(`${campo} debe expresarse en pesos enteros.`, 400);
+        }
+    }
+
+    const data = await svc.createPropioAsync({
+        id_sede: Number(id_sede),
+        nombre: nombre.trim(),
+        piso: Number(piso),
+        hora_apertura,
+        hora_cierre,
+        dias,
+        capacidad_reservas: capacidadReservas,
+        capacidad_para_no_reservas: capacidadNoReservas,
+        precio_pickup,
+        precio_auto,
+        precio_moto,
+    }, req.usuario);
+    if (!data) throwError('Error interno al crear el garage propio.', 500);
+    res.status(201).json(data);
+});
+
 // UPDATE (PUT)
 router.put('/:id', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAMES.SUPERADMIN), async (req, res) => {
     if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
