@@ -59,7 +59,6 @@ function serviceFixture({ pendingByEmail = false, existingUser = null, rolAdmin 
     };
     svc.usuarioRepo = { getByEmailAsync: async () => existingUser, getSuperadminsActivosAsync: async () => superadmins };
     svc.rolService = { getByIdAsync: async () => rolAdmin };
-    svc.notificacionService = { crearAsync: async (...args) => ({ args }) };
     return { svc, created: () => created };
 }
 
@@ -305,18 +304,12 @@ test('crear envía un email a cada superadmin con links de acción al frontend',
     }
 });
 
-test('crear notifica in-app a cada superadmin', async () => {
+test('crear no genera notificaciones in-app', async () => {
     const { svc } = serviceFixture();
     const notificaciones = [];
     svc.notificacionService = { crearAsync: async (...args) => { notificaciones.push(args); return { id: 1 }; } };
     await svc.createAsync(baseInput);
-    assert.equal(notificaciones.length, 1);
-    const [idUsuario, mensaje, tipo, actor] = notificaciones[0];
-    assert.equal(idUsuario, 50);
-    assert.match(mensaje, /Ana Gómez/);
-    assert.match(mensaje, /Transportes del Sur/);
-    assert.equal(tipo, 'solicitud_registro');
-    assert.equal(actor, 'Ana Gómez');
+    assert.equal(notificaciones.length, 0);
 });
 
 test('crear sigue exitoso aunque falle el envío de correos a superadmins', async () => {

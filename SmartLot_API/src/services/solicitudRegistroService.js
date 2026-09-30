@@ -3,7 +3,6 @@ import bcrypt from 'bcrypt';
 import SolicitudRegistroRepository from '../repositories/solicitudRegistroRepository.js';
 import UsuarioRepository from '../repositories/usuarioRepository.js';
 import RolService from './rolService.js';
-import NotificacionService from './NotificacionService.js';
 import { enviarCorreoDesdePlantilla } from './emailService.js';
 import { isValidEmail, isValidPhone, isValidStrongPassword } from '../helpers/validatorHelper.js';
 
@@ -20,7 +19,6 @@ export default class SolicitudRegistroService {
         this.repo = new SolicitudRegistroRepository();
         this.usuarioRepo = new UsuarioRepository();
         this.rolService = new RolService();
-        this.notificacionService = new NotificacionService();
     }
 
     _sanitizarSolicitud = (solicitud) => {
@@ -73,7 +71,7 @@ export default class SolicitudRegistroService {
         return solicitud;
     };
 
-    // Aviso a los superadmins (best-effort): un fallo de correo o de notificación
+    // Aviso por email a los superadmins (best-effort): un fallo de correo
     // nunca debe romper el registro público del administrador de empresa.
     _notificarSuperadmins = async (solicitud) => {
         let superadmins = [];
@@ -108,18 +106,6 @@ export default class SolicitudRegistroService {
                 await enviarCorreoDesdePlantilla(superadmin.email, 'solicitud_registro_superadmin', variables);
             } catch (err) {
                 console.error(`Error al enviar correo de nueva solicitud al superadmin ${superadmin.email}:`, err);
-            }
-            try {
-                await this.notificacionService.crearAsync(
-                    superadmin.id,
-                    `${solicitante} quiere registrar la empresa "${solicitud.empresa_nombre}" en SmartLot.`,
-                    'solicitud_registro',
-                    solicitante,
-                    null,
-                    solicitud.id
-                );
-            } catch (err) {
-                console.error(`Error al crear notificación de nueva solicitud para el superadmin ${superadmin.id}:`, err);
             }
         }
     };

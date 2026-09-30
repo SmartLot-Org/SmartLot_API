@@ -11,3 +11,5 @@ Aplicar los archivos por nombre, antes de desplegar el código que los consume. 
 `20260918_002_trato_empresa_garage_soft_delete.sql` agrega `"Borrado"` a `trato_empresa_garage` y convierte `uq_trato_sede_garage` en índice único parcial. Necesario antes de desplegar la cancelación lógica de tratos: la FK `consumos_reserva_id_trato_fkey` impide el DELETE físico cuando el trato ya tiene consumos.
 
 `20260923_001_reservas_qr_salida.sql` agrega el token de salida, crea uno para las reservas confirmadas que ya ingresaron y siguen dentro, y exige que sea distinto del token de ingreso. Aplicar antes de desplegar los endpoints QR actualizados.
+
+`20260930_001_notificaciones_solo_tratos.sql` elimina las notificaciones históricas de solicitudes de registro; las nuevas solicitudes siguen avisándose por email y aparecen en la bandeja de superadmin.
