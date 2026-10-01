@@ -15,6 +15,7 @@ const errorHandler = (err, req, res, next) => {
 
     const payload = { error: true, message, statusCode };
     if (err.code) payload.code = err.code;
+    if (err.code === 'RESERVATION_LIMIT_REACHED') payload.details = err.details;
     if (err.paymentId) payload.paymentId = err.paymentId;
     res.status(statusCode).json(payload);
 };

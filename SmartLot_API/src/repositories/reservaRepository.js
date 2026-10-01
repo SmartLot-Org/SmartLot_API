@@ -1,5 +1,6 @@
 // reservaRepository.js
 import pool from '../database/db.js';
+import { ACTIVE_RESERVATION_SQL, reservationPolicy, enforceReservationLimit } from '../helpers/reservationPolicy.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 const withoutQrToken = (row) => {
@@ -24,14 +25,19 @@ export default class ReservaRepository {
     quoteAndCreateWithClientAsync = async (entity, client, insert = true) => {
         await this.expirePendingAsync(client);
         const user = (await client.query(
-            `SELECT u.id,u.id_sede,COALESCE(u.id_empresa,s.id_empresa) AS id_empresa
+            `SELECT u.id,u.id_sede,u.limite_reservas_activas,COALESCE(u.id_empresa,s.id_empresa) AS id_empresa
                FROM usuarios u
                LEFT JOIN sedes s ON s.id=u.id_sede AND COALESCE(s."Borrado",false)=false
               WHERE u.id=$1 AND COALESCE(u.activo,true)=true
-                AND COALESCE(u."Borrado",false)=false`,
+                AND COALESCE(u."Borrado",false)=false ${insert ? 'FOR UPDATE OF u' : ''}`,
             [entity.id_usuario]
         )).rows[0];
         if (!user) throw Object.assign(new Error('El empleado no existe o esta inactivo.'), { statusCode: 403 });
+        // Una consulta separada después del bloqueo ve los inserts ya confirmados
+        // por la petición anterior (READ COMMITTED).
+        const current = await this.countActiveByUserAsync(user.id, client);
+        const politicaReservas = reservationPolicy(user.limite_reservas_activas, current);
+        if (insert) enforceReservationLimit(user.limite_reservas_activas, current);
         if (!user.id_sede) throw Object.assign(new Error('El empleado no tiene una sede asignada.'), { statusCode: 409 });
         if (!user.id_empresa) throw Object.assign(new Error('La sede del empleado no pertenece a una empresa activa.'), { statusCode: 409 });
         const vehicle = (await client.query(`SELECT id,tipo_vehiculo::text tipo_vehiculo FROM vehiculos WHERE id=$1 AND id_usuario=$2 AND COALESCE("Borrado",false)=false`, [entity.id_vehiculo,user.id])).rows[0];
@@ -56,7 +62,7 @@ export default class ReservaRepository {
         const minutos=Math.round((new Date(entity.fecha_salida)-new Date(entity.fecha_entrada))/60000);
         const importe=Number((tarifa*minutos/60).toFixed(2));
         const snap={id_trato:trato.id,modalidad_pago_aplicada:trato.modalidad_pago,tipo_cupo:tipoCupo,responsable_pago:responsable,tarifa_hora_aplicada:tarifa,importe_estimado:importe,estado_reserva:responsable==='empresa'?'confirmada':'pendiente_pago',retencion_pago_hasta:responsable==='empresa'?null:new Date(Date.now()+600000)};
-        if (!insert) return {idTrato:trato.id,modalidadPago:trato.modalidad_pago,tipoCupo,responsablePago:responsable,tipoVehiculo:vehicle.tipo_vehiculo,tarifaHora:tarifa,minutos,importe,requierePago:responsable==='empleado'};
+        if (!insert) return {idTrato:trato.id,modalidadPago:trato.modalidad_pago,tipoCupo,responsablePago:responsable,tipoVehiculo:vehicle.tipo_vehiculo,tarifaHora:tarifa,minutos,importe,requierePago:responsable==='empleado',politicaReservas};
         return withoutQrToken((await client.query(
             `INSERT INTO reservas
                 (id_usuario,id_garage,id_vehiculo,fecha_entrada,fecha_salida,entro,salio,dia,
@@ -83,6 +89,45 @@ export default class ReservaRepository {
                 snap.retencion_pago_hasta,
             ]
         )).rows[0]);
+    };
+
+    countActiveByUserAsync = async (idUsuario, client = pool, excludeId = null) => {
+        const result = await client.query(
+            `SELECT COUNT(*)::int AS activas FROM reservas
+              WHERE id_usuario=$1 AND ${ACTIVE_RESERVATION_SQL}
+                AND ($2::bigint IS NULL OR id<>$2)`, [idUsuario, excludeId]
+        );
+        return result.rows[0].activas;
+    };
+
+    // Una edición mantiene su lugar aunque el administrador haya bajado el
+    // límite. No permite cambiar titular ni reactivar reservas no vigentes.
+    updateWithLimitAsync = async (id, entity) => {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await this.expirePendingAsync(client);
+            const user = (await client.query(
+                'SELECT id FROM usuarios WHERE id=$1 FOR UPDATE', [entity.id_usuario]
+            )).rows[0];
+            if (!user) throw Object.assign(new Error('Empleado inexistente.'), { statusCode: 404 });
+            const current = (await client.query(
+                `SELECT *, (${ACTIVE_RESERVATION_SQL}) AS vigente FROM reservas WHERE id=$1 FOR UPDATE`, [id]
+            )).rows[0];
+            if (!current || Number(current.id_usuario) !== Number(entity.id_usuario) || !current.vigente || current.entro || current.salio) {
+                throw Object.assign(new Error('La reserva ya no puede modificarse ni reactivarse.'), { statusCode: 409 });
+            }
+            const result = await client.query(
+                `UPDATE reservas SET id_garage=$1, id_vehiculo=$2, fecha_entrada=$3,
+                    fecha_salida=$4, dia=$5 WHERE id=$6 RETURNING *`,
+                [entity.id_garage, entity.id_vehiculo, entity.fecha_entrada, entity.fecha_salida, entity.dia, id]
+            );
+            await client.query('COMMIT');
+            return withoutQrToken(result.rows[0]);
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally { client.release(); }
     };
 
     getAllAsync = async (requestingUser = null) => {
@@ -386,21 +431,6 @@ export default class ReservaRepository {
             [id]
         );
         return withoutQrToken(result.rows[0] ?? null);
-    }
-
-    getCountByUsuarioAndDateAsync = async (id_usuario, fecha, excludeId = null) => {
-        try {
-            const result = await pool.query(
-                `SELECT COUNT(*) as count FROM reservas
-                 WHERE id_usuario = $1
-                   AND fecha_entrada::date = $2::date
-                   AND COALESCE(salio, false) = false
-                   AND COALESCE("Borrado", false) = false
-                   AND ($3::integer IS NULL OR id != $3)`,
-                [id_usuario, fecha, excludeId]
-            );
-            return parseInt(result.rows[0].count, 10);
-        } catch (error) { console.error(error); return 0; }
     }
 
     registrarSalidaWithClientAsync = async (id, client) => {

@@ -9,6 +9,7 @@ class Usuario {
     contraseña;
     id_empresa;
     activo;
+    limite_reservas_activas = null;
     token_version = 0;
     Borrado;
     DeleteBy;

@@ -9,6 +9,7 @@ import UsuarioGarageService from './usuarioGarageService.js';
 import { enviarCorreoDesdePlantilla } from './emailService.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import { validateReservationLimit } from '../helpers/reservationPolicy.js';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
@@ -41,6 +42,11 @@ export default class UsuarioService {
     getAllAsync = async (requestingUser = null) => await this.repo.getAllAsync(requestingUser);
 
     getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
+
+    updateReservationLimitAsync = async (id, limit, actor) => {
+        validateReservationLimit(limit);
+        return this.repo.updateReservationLimitAsync(id, limit, actor);
+    };
 
     getAuditAsync = async () => await this.repo.getAuditAsync();
 

@@ -248,12 +248,16 @@ export default class ReservaService {
     };
 
     updateAsync = async (id, entity, requestingUser) => {
+        // Solo campos de la reserva editables; pago, estado, acceso y titular
+        // no se modifican por este endpoint.
+        entity = Object.fromEntries(Object.entries(entity).filter(([key]) =>
+            ['id_garage', 'id_vehiculo', 'fecha_entrada', 'fecha_salida', 'dia'].includes(key)));
         const rol = Number(requestingUser.id_rol);
         if (rol !== 1 && rol !== 4) {
             delete entity.id_usuario;
         }
 
-        const current = await this.repo.getByIdAsync(id);
+        const current = await this.repo.getByIdAsync(id, requestingUser);
         if (!current) {
             const error = new Error(`La reserva con ID ${id} no existe.`);
             error.statusCode = 404;
@@ -299,9 +303,8 @@ export default class ReservaService {
         await this._validarRelacionesAsync(mergedEntity, requestingUser);
         this._validarFechasAsync(mergedEntity);
         await this._validarDisponibilidadAsync(mergedEntity, id);
-        await this._validarMaximoReservasDiariasAsync(mergedEntity, id);
 
-        return await this.repo.updateAsync(id, mergedEntity);
+        return await this.repo.updateWithLimitAsync(id, mergedEntity);
     }
 
     deleteAsync = async (id, requestingUser = null) => await this.cancelarAsync(id, requestingUser);
@@ -876,22 +879,6 @@ export default class ReservaService {
 
         if (max > capReservas) {
             const error = new Error(`El garage supera su capacidad maxima de reservas (${capReservas}) durante el periodo solicitado.`);
-            error.statusCode = 400;
-            throw error;
-        }
-    }
-
-    _validarMaximoReservasDiariasAsync = async (entity, excludeId = null) => {
-        const fechaEntrada = new Date(entity.fecha_entrada);
-        const year = fechaEntrada.getFullYear();
-        const month = String(fechaEntrada.getMonth() + 1).padStart(2, '0');
-        const day = String(fechaEntrada.getDate()).padStart(2, '0');
-        const fechaStr = `${year}-${month}-${day}`;
-
-        const count = await this.repo.getCountByUsuarioAndDateAsync(entity.id_usuario, fechaStr, excludeId);
-
-        if (count >= 2) {
-            const error = new Error('El maximo de reservas en un dia son 2.');
             error.statusCode = 400;
             throw error;
         }

@@ -1,5 +1,6 @@
 // usuarioRepository.js
 import pool from '../database/db.js';
+import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
 
 export default class UsuarioRepository {
@@ -49,6 +50,37 @@ export default class UsuarioRepository {
             console.error('Error en deleteUserSessionsAsync:', error);
         }
     }
+
+    updateReservationLimitAsync = async (id, limit, actor) => {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const target = (await client.query(
+                `SELECT u.id,u.id_rol,u.activo,u.id_sede,
+                        COALESCE(u.id_empresa,s.id_empresa) AS id_empresa
+                   FROM usuarios u LEFT JOIN sedes s ON s.id=u.id_sede
+                  WHERE u.id=$1 AND u."Borrado"=false FOR UPDATE OF u`, [id]
+            )).rows[0];
+            if (!target || target.activo === false || Number(target.id_rol) !== 2) {
+                throw Object.assign(new Error('Empleado activo inexistente.'), { statusCode: 404 });
+            }
+            if (!hasRole(actor, 4, ROLE_NAMES.SUPERADMIN) && (
+                !hasRole(actor, 1, ROLE_NAMES.ADMIN) || !actor.id_empresa ||
+                Number(actor.id_empresa) !== Number(target.id_empresa) ||
+                (actor.id_sede != null && Number(actor.id_sede) !== Number(target.id_sede))
+            )) throw Object.assign(new Error('No tiene permisos para modificar este empleado.'), { statusCode: 403 });
+            const result = await client.query(
+                `UPDATE usuarios SET limite_reservas_activas=$1, "UpdateBy"=$2, "UpdateAt"=NOW()
+                  WHERE id=$3 RETURNING id AS "idUsuario", limite_reservas_activas AS "limiteReservasActivas"`,
+                [limit, actor.id, id]
+            );
+            await client.query('COMMIT');
+            return result.rows[0];
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally { client.release(); }
+    };
 
     getAllAsync = async (requestingUser = null) => {
         try {
@@ -155,10 +187,10 @@ export default class UsuarioRepository {
     createAsync = async (entity) => {
         try {
             const result = await pool.query(
-                `INSERT INTO usuarios (id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, activo, token_version)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                `INSERT INTO usuarios (id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, activo, token_version, limite_reservas_activas)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
-                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0]
+                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0, entity.limite_reservas_activas ?? null]
             );
             return result.rows[0];
         } catch (error) {
@@ -177,10 +209,10 @@ export default class UsuarioRepository {
     createWithClientAsync = async (entity, client) => {
         try {
             const result = await client.query(
-                `INSERT INTO usuarios (id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, activo, token_version)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+                `INSERT INTO usuarios (id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, activo, token_version, limite_reservas_activas)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
-                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0]
+                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0, entity.limite_reservas_activas ?? null]
             );
             return result.rows[0];
         } catch (error) {

@@ -23,6 +23,7 @@ const client = {
         rows: [{ id: 13, cantidad_cocheras: 4, modalidad_pago: 'empresa_cubre_cupo', precio_auto: 100 }],
       };
     }
+    if (sql.includes('COUNT(*)::int AS activas')) return { rows: [{ activas: 0 }] };
     if (sql.includes('COUNT(*) FILTER')) {
       return { rowCount: 1, rows: [{ trato: 0, garage: 0 }] };
     }
@@ -64,6 +65,20 @@ test('crea reservas sin ambigüedad entre text y estado_reserva_enum', async () 
   assert.equal(insert.params[12], 'confirmada');
   assert.equal(insert.params[13], null);
   assert.doesNotMatch(insert.sql, /CASE WHEN \$13/);
+});
+
+test('el error de conteo se propaga y no permite insertar una reserva', async () => {
+  const queries = [];
+  const dbError = new Error('No se pudo consultar reservas vigentes');
+  const failingClient = { async query(sql) {
+    queries.push(sql);
+    if (sql.includes('UPDATE reservas')) return { rows: [], rowCount: 0 };
+    if (sql.includes('FROM usuarios')) return { rows: [{ id: 7, id_sede: 3, id_empresa: 2, limite_reservas_activas: 2 }] };
+    throw dbError;
+  } };
+  await assert.rejects(new ReservaRepository().quoteAndCreateWithClientAsync({ id_usuario: 7 }, failingClient), dbError);
+  assert.ok(queries.some((sql) => sql.includes('FOR UPDATE OF u')));
+  assert.ok(!queries.some((sql) => sql.includes('INSERT INTO reservas')));
 });
 
 mock.restoreAll();

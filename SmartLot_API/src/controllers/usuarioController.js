@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import UsuarioService from './../services/usuarioService.js';
 import { isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone, isValidStrongPassword } from '../helpers/validatorHelper.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
+import { validateReservationLimit } from '../helpers/reservationPolicy.js';
+import { ROLE_NAMES } from '../helpers/roles.js';
 import { requireRole, requireRoleOrSelf } from '../middlewares/rolesMiddleware.js';
 import authRateLimiter from '../middlewares/rateLimiterMiddleware.js';
 
@@ -20,7 +22,7 @@ function sinContraseña(data) {
     if (Array.isArray(data)) return data.map(sinContraseña);
     if (!data || typeof data !== 'object') return data;
     const { contraseña, ...usuario } = data;
-    return usuario;
+    return { ...usuario, limiteReservasActivas: usuario.limite_reservas_activas ?? null };
 }
 
 // GET ALL (admin o smartlot)
@@ -455,10 +457,22 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
         }
     }
 
+    // Solo el endpoint administrativo de alta puede establecer este campo.
+    req.body.limite_reservas_activas = req.body.limiteReservasActivas === undefined
+        ? null : validateReservationLimit(req.body.limiteReservasActivas);
+    if (req.body.limiteReservasActivas !== undefined && Number(id_rol) !== 2) {
+        throwError('El límite de reservas solo se configura para empleados.', 400);
+    }
     const data = await svc.createAsync(req.body);
     if (!data) throwError('Error interno al crear el usuario.', 500);
     const { contraseña: hashCreado, ...usuarioCreado } = data;
-    res.status(201).json(usuarioCreado);
+    res.status(201).json(sinContraseña(usuarioCreado));
+});
+
+router.patch('/:id/limite-reservas', authMiddleware, requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), async (req, res) => {
+    if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
+    const limit = validateReservationLimit(req.body?.limiteReservasActivas);
+    res.status(200).json(await svc.updateReservationLimitAsync(Number(req.params.id), limit, req.usuario));
 });
 
 // UPDATE (PUT) - admin, smartlot o el propio usuario
