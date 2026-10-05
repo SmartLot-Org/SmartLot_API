@@ -139,23 +139,6 @@ export default class ReservaService {
         if (!rows) return null;
 
         return rows.map((r) => {
-            const fechaEntrada = r.fecha_entrada ? new Date(r.fecha_entrada) : null;
-            const fechaSalida = r.fecha_salida ? new Date(r.fecha_salida) : null;
-
-            const pad = (n) => String(n).padStart(2, "0");
-
-            const fechaStr = fechaEntrada
-                ? `${fechaEntrada.getFullYear()}-${pad(fechaEntrada.getMonth() + 1)}-${pad(fechaEntrada.getDate())}`
-                : null;
-
-            const horaEntrada = fechaEntrada
-                ? `${pad(fechaEntrada.getHours())}:${pad(fechaEntrada.getMinutes())}`
-                : null;
-
-            const horaSalida = fechaSalida
-                ? `${pad(fechaSalida.getHours())}:${pad(fechaSalida.getMinutes())}`
-                : null;
-
             const nombreZona = r.garage_piso || r.garage_ubicacion || null;
             const nroPlaza = r.garage_ubicacion || null;
 
@@ -174,9 +157,15 @@ export default class ReservaService {
                 id_reserva: r.id,
                 id: r.id,
                 id_usuario: r.id_usuario,
-                fecha: fechaStr,
-                hora_entrada: horaEntrada,
-                hora_salida: horaSalida,
+                id_garage: r.id_garage,
+                id_vehiculo: r.id_vehiculo,
+                // PostgreSQL formatea los timestamp sin zona literalmente.
+                // No pasan por Date ni por la zona horaria del proceso Node.
+                fecha_entrada: r.fecha_entrada,
+                fecha_salida: r.fecha_salida,
+                fecha: r.fecha,
+                hora_entrada: r.hora_entrada,
+                hora_salida: r.hora_salida,
                 nombre_garage: r.garage_nombre || null,
                 nombre_zona: nombreZona,
                 nro_plaza: nroPlaza,
