@@ -21,6 +21,10 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: resolveSsl(),
 });
+pool.on('error', (err) => {
+  console.error('Error en cliente inactivo del pool PostgreSQL:', err.message);
+});
+
 pool.connect((err, client, release) => {
   if (err) {
     return console.error('Error adquiriendo el cliente', err.stack);
