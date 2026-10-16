@@ -1,0 +1,708 @@
+-- ============================================================
+-- TABLAS
+-- ============================================================
+
+-- roles
+
+create table public.roles (
+  id serial not null,
+  tipo_rol character varying(50) not null,
+  "Borrado" boolean not null default false,
+  constraint roles_pkey primary key (id)
+) TABLESPACE pg_default;
+
+-- empresas
+
+create table public.empresas (
+  id serial not null,
+  nombre character varying(255) not null,
+  descripcion text null,
+  "DeleteBy" integer null,
+  "UpdateBy" integer null,
+  "DeleteAt" timestamp without time zone null,
+  "UpdateAt" timestamp without time zone null,
+  "Borrado" boolean null,
+  constraint empresas_pkey primary key (id)
+) TABLESPACE pg_default;
+
+-- sedes
+
+create table public.sedes (
+  id serial not null,
+  id_empresa integer null,
+  nombre character varying(255) not null,
+  descripcion text null,
+  ubicacion character varying(255) null,
+  "Borrado" boolean not null default false,
+  latitud numeric(10, 8) null,
+  longitud numeric(11, 8) null,
+  constraint sedes_pkey primary key (id),
+  constraint sedes_id_empresa_fkey foreign KEY (id_empresa) references empresas (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- garages
+
+create table public.garages (
+  id serial not null,
+  nombre character varying(255) not null,
+  piso integer null,
+  ubicacion character varying(255) null,
+  estado boolean null default true,
+  capacidad integer not null,
+  capacidad_para_no_reservas integer null,
+  capacidad_reservas integer null,
+  ocupacion_reservas integer null,
+  ocupacion_no_reservas integer null,
+  "Borrado" boolean not null default false,
+  hora_apertura time without time zone null,
+  hora_cierre time without time zone null,
+  latitud numeric(10, 8) null,
+  longitud numeric(11, 8) null,
+  precio_pickup integer null,
+  precio_auto integer null,
+  precio_moto integer null,
+  id_sede_propia integer null,
+  constraint garages_pkey primary key (id),
+  constraint garages_id_sede_propia_fkey foreign KEY (id_sede_propia) references sedes (id)
+) TABLESPACE pg_default;
+
+-- garage_dias
+
+create table public.garage_dias (
+  id serial not null,
+  id_garage integer not null,
+  dia public.dia_semana not null,
+  activo boolean null,
+  constraint garage_dias_pkey primary key (id),
+  constraint unique_garage_dia unique (id_garage, dia),
+  constraint fk_garage foreign KEY (id_garage) references garages (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- marcas
+
+create table public.marcas (
+  id serial not null,
+  nombre character varying(255) not null,
+  "Borrado" boolean not null default false,
+  constraint marcas_pkey primary key (id)
+) TABLESPACE pg_default;
+
+-- modelos
+
+create table public.modelos (
+  id serial not null,
+  id_marca integer null,
+  nombre character varying(255) not null,
+  "Borrado" boolean not null default false,
+  tipo_vehiculo public.tipo_vehiculo_enum not null,
+  constraint modelos_pkey primary key (id),
+  constraint modelos_id_marca_fkey foreign KEY (id_marca) references marcas (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- usuarios
+
+create table public.usuarios (
+  id serial not null,
+  id_rol integer null,
+  nombre character varying(255) not null,
+  apellido character varying(255) not null,
+  id_sede integer null,
+  email character varying(255) not null,
+  telefono character varying(50) null,
+  "contraseña" character varying(255) not null,
+  id_empresa integer null,
+  activo boolean null default true,
+  token_version integer not null default 0,
+  "Borrado" boolean not null default false,
+  "DeleteBy" integer null,
+  "UpdateBy" integer null,
+  "DeleteAt" timestamp without time zone null,
+  "UpdateAt" timestamp without time zone null,
+  limite_reservas_activas smallint null,
+  constraint usuarios_pkey primary key (id),
+  constraint usuarios_email_key unique (email),
+  constraint usuarios_telefono_key unique (telefono),
+  constraint usuarios_id_sede_fkey foreign KEY (id_sede) references sedes (id) on delete set null,
+  constraint usuarios_id_empresa_fkey foreign KEY (id_empresa) references empresas (id),
+  constraint usuarios_id_rol_fkey foreign KEY (id_rol) references roles (id),
+  constraint usuarios_limite_reservas_activas_no_negativo check (
+    (
+      (limite_reservas_activas is null)
+      or (limite_reservas_activas >= 0)
+    )
+  )
+) TABLESPACE pg_default;
+
+-- usuario_garage
+
+create table public.usuario_garage (
+  id serial not null,
+  id_usuario integer null,
+  id_garage integer null,
+  constraint usuario_garage_pkey primary key (id),
+  constraint usuario_garage_id_garage_fkey foreign KEY (id_garage) references garages (id) on delete CASCADE,
+  constraint usuario_garage_id_usuario_fkey foreign KEY (id_usuario) references usuarios (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- vehiculos
+
+create table public.vehiculos (
+  id serial not null,
+  id_usuario integer null,
+  id_modelo integer null,
+  patente character varying(20) not null,
+  "Borrado" boolean not null default false,
+  tipo_vehiculo public.tipo_vehiculo_enum not null,
+  constraint vehiculos_pkey primary key (id),
+  constraint vehiculos_patente_key unique (patente),
+  constraint vehiculos_id_modelo_fkey foreign KEY (id_modelo) references modelos (id),
+  constraint vehiculos_id_usuario_fkey foreign KEY (id_usuario) references usuarios (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- trato_empresa_garage
+
+create table public.trato_empresa_garage (
+  id bigint generated by default as identity not null,
+  created_at timestamp with time zone not null default now(),
+  cantidad_cocheras smallint null,
+  precio_pickup integer null,
+  precio_auto integer null,
+  precio_moto integer null,
+  id_garage integer null,
+  id_sede integer not null,
+  modalidad_pago public.modalidad_pago_trato_enum not null default 'empresa_cubre_cupo'::modalidad_pago_trato_enum,
+  "Borrado" boolean not null default false,
+  constraint trato_empresa_garage_pkey primary key (id),
+  constraint fk_trato_sede foreign KEY (id_sede) references sedes (id),
+  constraint trato_empresa_garage_id_garage_fkey foreign KEY (id_garage) references garages (id)
+) TABLESPACE pg_default;
+
+-- historial_modalidad_trato
+
+create table public.historial_modalidad_trato (
+  id bigint generated always as identity not null,
+  id_trato bigint not null,
+  modalidad_anterior public.modalidad_pago_trato_enum null,
+  modalidad_nueva public.modalidad_pago_trato_enum not null,
+  cambiado_por integer null,
+  fecha_cambio timestamp with time zone not null default now(),
+  constraint historial_modalidad_trato_pkey primary key (id),
+  constraint historial_modalidad_trato_cambiado_por_fkey foreign KEY (cambiado_por) references usuarios (id) on delete set null,
+  constraint historial_modalidad_trato_id_trato_fkey foreign KEY (id_trato) references trato_empresa_garage (id) on delete RESTRICT,
+  constraint historial_modalidad_cambio_real_check check (
+    (
+      (modalidad_anterior is null)
+      or (modalidad_anterior <> modalidad_nueva)
+    )
+  )
+) TABLESPACE pg_default;
+
+-- solicitudes
+
+create table public.solicitudes (
+  id bigint generated by default as identity not null,
+  created_at timestamp with time zone not null default now(),
+  id_sede integer not null,
+  id_garage integer not null,
+  descripcion text null,
+  cantidad_cocheras integer not null,
+  estado public.estado_solicitud not null default 'pendiente'::estado_solicitud,
+  modalidad_pago public.modalidad_pago_trato_enum not null default 'empresa_cubre_cupo'::modalidad_pago_trato_enum,
+  tipo_solicitud text not null default 'nueva'::text,
+  id_trato integer null,
+  constraint solicitudes_pkey primary key (id),
+  constraint solicitudes_id_garage_fkey foreign KEY (id_garage) references garages (id) on delete RESTRICT,
+  constraint solicitudes_id_sede_fkey foreign KEY (id_sede) references sedes (id) on delete RESTRICT,
+  constraint solicitudes_id_trato_fkey foreign KEY (id_trato) references trato_empresa_garage (id),
+  constraint solicitudes_cantidad_cocheras_check check ((cantidad_cocheras > 0))
+) TABLESPACE pg_default;
+
+-- reservas
+
+create table public.reservas (
+  id serial not null,
+  id_usuario integer null,
+  id_garage integer null,
+  id_vehiculo integer null,
+  fecha_entrada timestamp without time zone null,
+  fecha_salida timestamp without time zone null,
+  entro boolean null default false,
+  salio boolean null default false,
+  "Borrado" boolean not null default false,
+  dia public.dia_semana null,
+  id_trato bigint null,
+  modalidad_pago_aplicada public.modalidad_pago_trato_enum not null default 'empresa_cubre_cupo'::modalidad_pago_trato_enum,
+  tipo_cupo public.tipo_cupo_reserva_enum not null default 'dentro_cupo'::tipo_cupo_reserva_enum,
+  responsable_pago public.responsable_pago_enum not null default 'empresa'::responsable_pago_enum,
+  tarifa_hora_aplicada numeric(12, 2) null,
+  importe_estimado numeric(12, 2) null,
+  estado_reserva public.estado_reserva_enum not null default 'confirmada'::estado_reserva_enum,
+  retencion_pago_hasta timestamp with time zone null,
+  qr_token uuid not null default gen_random_uuid (),
+  qr_salida_token uuid null,
+  constraint reservas_pkey primary key (id),
+  constraint reservas_id_trato_fkey foreign KEY (id_trato) references trato_empresa_garage (id) on delete RESTRICT,
+  constraint reservas_id_usuario_fkey foreign KEY (id_usuario) references usuarios (id),
+  constraint reservas_id_vehiculo_fkey foreign KEY (id_vehiculo) references vehiculos (id),
+  constraint reservas_id_garage_fkey foreign KEY (id_garage) references garages (id),
+  constraint reservas_empresa_sin_retencion_check check (
+    (
+      (
+        responsable_pago <> 'empresa'::responsable_pago_enum
+      )
+      or (retencion_pago_hasta is null)
+    )
+  ),
+  constraint reservas_tarifa_hora_aplicada_check check (
+    (
+      (tarifa_hora_aplicada is null)
+      or (tarifa_hora_aplicada >= (0)::numeric)
+    )
+  ),
+  constraint reservas_importe_estimado_check check (
+    (
+      (importe_estimado is null)
+      or (importe_estimado >= (0)::numeric)
+    )
+  ),
+  constraint reservas_modalidad_responsable_check check (
+    (
+      (
+        (
+          modalidad_pago_aplicada = 'empresa_cubre_cupo'::modalidad_pago_trato_enum
+        )
+        and (tipo_cupo = 'dentro_cupo'::tipo_cupo_reserva_enum)
+        and (
+          responsable_pago = 'empresa'::responsable_pago_enum
+        )
+      )
+      or (
+        (
+          modalidad_pago_aplicada = 'empresa_cubre_cupo'::modalidad_pago_trato_enum
+        )
+        and (tipo_cupo = 'extra'::tipo_cupo_reserva_enum)
+        and (
+          responsable_pago = 'empleado'::responsable_pago_enum
+        )
+      )
+      or (
+        (
+          modalidad_pago_aplicada = 'empleado_paga_todo'::modalidad_pago_trato_enum
+        )
+        and (
+          responsable_pago = 'empleado'::responsable_pago_enum
+        )
+      )
+    )
+  ),
+  constraint reservas_qr_salida_distinto_chk check (
+    (
+      (qr_salida_token is null)
+      or (qr_salida_token <> qr_token)
+    )
+  ),
+  constraint reservas_retencion_pago_check check (
+    (
+      (
+        (
+          estado_reserva = 'pendiente_pago'::estado_reserva_enum
+        )
+        and (
+          responsable_pago = 'empleado'::responsable_pago_enum
+        )
+        and (retencion_pago_hasta is not null)
+      )
+      or (
+        estado_reserva <> 'pendiente_pago'::estado_reserva_enum
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+-- consumos_reserva
+
+create table public.consumos_reserva (
+  id bigserial not null,
+  id_reserva integer not null,
+  id_trato integer not null,
+  id_sede integer not null,
+  id_empresa integer not null,
+  id_garage integer not null,
+  tipo_vehiculo public.tipo_vehiculo_enum not null,
+  fecha_inicio timestamp without time zone not null,
+  fecha_fin timestamp without time zone not null,
+  minutos_facturados integer not null,
+  tarifa_hora_aplicada numeric(14, 2) not null,
+  importe_generado numeric(14, 2) not null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  modalidad_pago_aplicada public.modalidad_pago_trato_enum not null default 'empresa_cubre_cupo'::modalidad_pago_trato_enum,
+  tipo_cupo public.tipo_cupo_reserva_enum not null default 'dentro_cupo'::tipo_cupo_reserva_enum,
+  responsable_pago public.responsable_pago_enum not null default 'empresa'::responsable_pago_enum,
+  constraint consumos_reserva_pkey primary key (id),
+  constraint consumos_reserva_id_reserva_key unique (id_reserva),
+  constraint consumos_reserva_id_empresa_fkey foreign KEY (id_empresa) references empresas (id),
+  constraint consumos_reserva_id_sede_fkey foreign KEY (id_sede) references sedes (id),
+  constraint consumos_reserva_id_trato_fkey foreign KEY (id_trato) references trato_empresa_garage (id),
+  constraint consumos_reserva_id_reserva_fkey foreign KEY (id_reserva) references reservas (id),
+  constraint consumos_reserva_id_garage_fkey foreign KEY (id_garage) references garages (id),
+  constraint consumos_reserva_tarifa_hora_aplicada_check check ((tarifa_hora_aplicada >= (0)::numeric)),
+  constraint consumos_reserva_importe_generado_check check ((importe_generado >= (0)::numeric)),
+  constraint consumos_reserva_minutos_facturados_check check ((minutos_facturados >= 0)),
+  constraint consumos_modalidad_responsable_check check (
+    (
+      (
+        (
+          modalidad_pago_aplicada = 'empresa_cubre_cupo'::modalidad_pago_trato_enum
+        )
+        and (tipo_cupo = 'dentro_cupo'::tipo_cupo_reserva_enum)
+        and (
+          responsable_pago = 'empresa'::responsable_pago_enum
+        )
+      )
+      or (
+        (
+          modalidad_pago_aplicada = 'empresa_cubre_cupo'::modalidad_pago_trato_enum
+        )
+        and (tipo_cupo = 'extra'::tipo_cupo_reserva_enum)
+        and (
+          responsable_pago = 'empleado'::responsable_pago_enum
+        )
+      )
+      or (
+        (
+          modalidad_pago_aplicada = 'empleado_paga_todo'::modalidad_pago_trato_enum
+        )
+        and (
+          responsable_pago = 'empleado'::responsable_pago_enum
+        )
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+-- pagos
+
+create table public.pagos (
+  id uuid not null default gen_random_uuid (),
+  id_reserva integer null,
+  id_orden_externa character varying(100) null,
+  mp_preference_id character varying(100) null,
+  mp_payment_id character varying(100) null,
+  mp_payment_status character varying(50) null,
+  mp_payment_type character varying(50) null,
+  monto numeric(12, 2) not null,
+  moneda character varying(3) null default 'ARS'::character varying,
+  descripcion text null,
+  fecha_creacion timestamp with time zone null default now(),
+  fecha_actualizacion timestamp with time zone null default now(),
+  fecha_aprobacion timestamp with time zone null,
+  metadata jsonb null,
+  id_empresa integer null,
+  constraint pagos_pkey primary key (id),
+  constraint pagos_mp_payment_id_key unique (mp_payment_id),
+  constraint pagos_mp_preference_id_key unique (mp_preference_id),
+  constraint pagos_id_empresa_fkey foreign KEY (id_empresa) references empresas (id) on delete set null,
+  constraint pagos_id_reserva_fkey foreign KEY (id_reserva) references reservas (id) on delete set null
+) TABLESPACE pg_default;
+
+-- reembolsos
+
+create table public.reembolsos (
+  id uuid not null default gen_random_uuid (),
+  id_pago uuid null,
+  mp_refund_id character varying(100) null,
+  monto numeric(12, 2) not null,
+  moneda character varying(3) null default 'ARS'::character varying,
+  estado character varying(50) null,
+  motivo character varying(255) null,
+  fecha_creacion timestamp with time zone null default now(),
+  fecha_actualizacion timestamp with time zone null default now(),
+  metadata jsonb null,
+  constraint reembolsos_pkey primary key (id),
+  constraint reembolsos_mp_refund_id_key unique (mp_refund_id),
+  constraint reembolsos_id_pago_fkey foreign KEY (id_pago) references pagos (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- webhook_eventos
+
+create table public.webhook_eventos (
+  id uuid not null default gen_random_uuid (),
+  mp_event_id character varying(100) null,
+  tipo_evento character varying(100) null,
+  mp_payment_id character varying(100) null,
+  payload jsonb not null,
+  firma_valida boolean null default false,
+  procesado boolean null default false,
+  error_procesamiento text null,
+  fecha_recepcion timestamp with time zone null default now(),
+  fecha_procesamiento timestamp with time zone null,
+  constraint webhook_eventos_pkey primary key (id)
+) TABLESPACE pg_default;
+
+-- notificaciones
+
+create table public.notificaciones (
+  id serial not null,
+  id_usuario integer not null,
+  id_garage integer null,
+  tipo text not null,
+  mensaje text not null,
+  actor_nombre text null,
+  id_relacion integer null,
+  leida boolean not null default false,
+  created_at timestamp with time zone not null default now(),
+  constraint notificaciones_pkey primary key (id),
+  constraint notificaciones_id_garage_fkey foreign KEY (id_garage) references garages (id),
+  constraint notificaciones_id_usuario_fkey foreign KEY (id_usuario) references usuarios (id)
+) TABLESPACE pg_default;
+
+-- conflictos
+
+create table public.conflictos (
+  id bigint generated always as identity not null,
+  id_usuario bigint not null,
+  descripcion text not null,
+  prioridad character varying(20) not null,
+  estado character varying(20) not null default 'Pendiente'::character varying,
+  fecha_creacion timestamp without time zone not null default now(),
+  "Borrado" boolean not null default false,
+  "SuperAdmin" boolean null,
+  constraint conflictos_pkey primary key (id),
+  constraint fk_conflictos_usuario foreign KEY (id_usuario) references usuarios (id),
+  constraint conflictos_estado_check check (
+    (
+      (estado)::text = any (
+        (
+          array[
+            'Pendiente'::character varying,
+            'En Proceso'::character varying,
+            'Resuelto'::character varying
+          ]
+        )::text[]
+      )
+    )
+  ),
+  constraint conflictos_prioridad_check check (
+    (
+      (prioridad)::text = any (
+        (
+          array[
+            'Baja'::character varying,
+            'Media'::character varying,
+            'Alta'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+-- email_templates
+
+create table public.email_templates (
+  id serial not null,
+  codigo text not null,
+  nombre text not null,
+  descripcion text null,
+  asunto text not null,
+  header_html text not null default ''::text,
+  cuerpo_html text not null,
+  footer_html text not null default ''::text,
+  variables jsonb not null default '[]'::jsonb,
+  activa boolean not null default true,
+  updated_at timestamp with time zone not null default now(),
+  created_at timestamp with time zone not null default now(),
+  constraint email_templates_pkey primary key (id),
+  constraint email_templates_codigo_key unique (codigo)
+) TABLESPACE pg_default;
+
+-- solicitudes_registro
+
+create table public.solicitudes_registro (
+  id serial not null,
+  nombre text not null,
+  apellido text not null,
+  email text not null,
+  telefono text null,
+  "contraseña_hash" text not null,
+  empresa_nombre text not null,
+  empresa_descripcion text null,
+  estado text not null default 'pendiente'::text,
+  created_at timestamp with time zone not null default now(),
+  revisada_at timestamp with time zone null,
+  revisada_por integer null,
+  constraint solicitudes_registro_pkey primary key (id),
+  constraint solicitudes_registro_revisada_por_fkey foreign KEY (revisada_por) references usuarios (id)
+) TABLESPACE pg_default;
+
+-- password_reset_codes
+
+create table public.password_reset_codes (
+  id serial not null,
+  id_usuario integer not null,
+  codigo_hash text not null,
+  expires_at timestamp with time zone not null,
+  usado boolean not null default false,
+  creado_en timestamp with time zone not null default now(),
+  constraint password_reset_codes_pkey primary key (id),
+  constraint password_reset_codes_id_usuario_fkey foreign KEY (id_usuario) references usuarios (id) on delete CASCADE
+) TABLESPACE pg_default;
+
+-- refresh_sessions
+
+create table public.refresh_sessions (
+  id uuid not null default gen_random_uuid (),
+  usuario_id integer not null,
+  token_version integer not null,
+  refresh_token text not null,
+  created_at timestamp with time zone not null default now(),
+  expires_at timestamp with time zone not null,
+  constraint refresh_sessions_pkey primary key (id),
+  constraint refresh_sessions_usuario_id_fkey foreign KEY (usuario_id) references usuarios (id)
+) TABLESPACE pg_default;
+
+-- ============================================================
+-- INDICES
+-- ============================================================
+
+create index IF not exists idx_consumos_reserva_empresa_periodo on public.consumos_reserva using btree (id_empresa, fecha_inicio) TABLESPACE pg_default;
+
+create index IF not exists idx_consumos_reserva_sede_periodo on public.consumos_reserva using btree (id_sede, fecha_inicio) TABLESPACE pg_default;
+
+create index IF not exists idx_consumos_reserva_garage_periodo on public.consumos_reserva using btree (id_garage, fecha_inicio) TABLESPACE pg_default;
+
+create index IF not exists idx_consumos_empresa_responsable_periodo on public.consumos_reserva using btree (id_empresa, responsable_pago, fecha_inicio) TABLESPACE pg_default;
+
+create index IF not exists idx_consumos_garage_responsable_periodo on public.consumos_reserva using btree (id_garage, responsable_pago, fecha_inicio) TABLESPACE pg_default;
+
+create index IF not exists idx_consumos_reserva_id_trato on public.consumos_reserva using btree (id_trato) TABLESPACE pg_default;
+
+create unique INDEX IF not exists uq_garage_propio_sede on public.garages using btree (id_sede_propia) TABLESPACE pg_default
+where
+  (
+    (id_sede_propia is not null)
+    and (COALESCE("Borrado", false) = false)
+  );
+
+create index IF not exists idx_historial_modalidad_trato_fecha on public.historial_modalidad_trato using btree (id_trato, fecha_cambio desc) TABLESPACE pg_default;
+
+create index IF not exists idx_historial_modalidad_trato_usuario on public.historial_modalidad_trato using btree (cambiado_por) TABLESPACE pg_default;
+
+create index IF not exists idx_notificaciones_usuario on public.notificaciones using btree (id_usuario, leida, created_at desc) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_mp_preference_id on public.pagos using btree (mp_preference_id) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_mp_payment_id on public.pagos using btree (mp_payment_id) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_id_reserva on public.pagos using btree (id_reserva) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_id_orden_externa on public.pagos using btree (id_orden_externa) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_id_empresa on public.pagos using btree (id_empresa) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_status on public.pagos using btree (mp_payment_status) TABLESPACE pg_default;
+
+create index IF not exists idx_pagos_metadata_gin on public.pagos using gin (metadata) TABLESPACE pg_default;
+
+create index IF not exists idx_reembolsos_id_pago on public.reembolsos using btree (id_pago) TABLESPACE pg_default;
+
+create index IF not exists idx_reembolsos_mp_refund_id on public.reembolsos using btree (mp_refund_id) TABLESPACE pg_default;
+
+create index IF not exists idx_refresh_sessions_id on public.refresh_sessions using btree (id) TABLESPACE pg_default;
+
+create index IF not exists idx_refresh_sessions_usuario on public.refresh_sessions using btree (usuario_id) TABLESPACE pg_default;
+
+create index IF not exists idx_reservas_id_trato on public.reservas using btree (id_trato) TABLESPACE pg_default;
+
+create index IF not exists idx_reservas_disponibilidad_activas on public.reservas using btree (id_garage, fecha_entrada, fecha_salida) TABLESPACE pg_default
+where
+  (
+    ("Borrado" = false)
+    and (
+      estado_reserva = any (
+        array[
+          'pendiente_pago'::estado_reserva_enum,
+          'confirmada'::estado_reserva_enum
+        ]
+      )
+    )
+  );
+
+create unique INDEX IF not exists uq_reservas_qr_token on public.reservas using btree (qr_token) TABLESPACE pg_default;
+
+create unique INDEX IF not exists uq_reservas_qr_salida_token on public.reservas using btree (qr_salida_token) TABLESPACE pg_default
+where
+  (qr_salida_token is not null);
+
+create index IF not exists idx_reservas_usuario_vigentes on public.reservas using btree (
+  id_usuario,
+  estado_reserva,
+  fecha_salida,
+  retencion_pago_hasta
+) TABLESPACE pg_default
+where
+  (
+    ("Borrado" = false)
+    and (
+      estado_reserva = any (
+        array[
+          'pendiente_pago'::estado_reserva_enum,
+          'confirmada'::estado_reserva_enum
+        ]
+      )
+    )
+  );
+
+create index IF not exists solicitudes_id_garage_estado_idx on public.solicitudes using btree (id_garage, estado) TABLESPACE pg_default;
+
+create index IF not exists solicitudes_id_sede_estado_idx on public.solicitudes using btree (id_sede, estado) TABLESPACE pg_default;
+
+create unique INDEX IF not exists uq_solicitud_modificacion_pendiente on public.solicitudes using btree (id_trato) TABLESPACE pg_default
+where
+  (
+    (tipo_solicitud = 'modificacion'::text)
+    and (estado = 'pendiente'::estado_solicitud)
+  );
+
+create unique INDEX IF not exists uq_solicitudes_registro_email_pendiente on public.solicitudes_registro using btree (email) TABLESPACE pg_default
+where
+  (estado = 'pendiente'::text);
+
+create index IF not exists idx_solicitudes_registro_estado on public.solicitudes_registro using btree (estado, created_at desc) TABLESPACE pg_default;
+
+create index IF not exists idx_trato_empresa_garage_garage on public.trato_empresa_garage using btree (id_garage) TABLESPACE pg_default;
+
+create index IF not exists idx_trato_empresa_garage_activos on public.trato_empresa_garage using btree (id_garage) TABLESPACE pg_default
+where
+  ("Borrado" = false);
+
+create unique INDEX IF not exists uq_trato_sede_garage on public.trato_empresa_garage using btree (id_sede, id_garage) TABLESPACE pg_default
+where
+  (
+    (id_sede is not null)
+    and ("Borrado" = false)
+  );
+
+create unique INDEX IF not exists idx_webhook_eventos_mp_event_id on public.webhook_eventos using btree (mp_event_id) TABLESPACE pg_default;
+
+create index IF not exists idx_webhook_eventos_mp_payment_id on public.webhook_eventos using btree (mp_payment_id) TABLESPACE pg_default;
+
+create index IF not exists idx_webhook_eventos_procesado on public.webhook_eventos using btree (procesado) TABLESPACE pg_default;
+
+-- ============================================================
+-- TRIGGERS
+-- ============================================================
+
+create trigger trg_modelos_propagate_type_to_vehicles
+after
+update OF tipo_vehiculo on modelos for EACH row when (
+  old.tipo_vehiculo is distinct from new.tipo_vehiculo
+)
+execute FUNCTION smartlot_propagate_model_type_to_vehicles ();
+
+create trigger trg_vehiculos_set_type_from_model BEFORE INSERT
+or
+update OF id_modelo,
+tipo_vehiculo on vehiculos for EACH row
+execute FUNCTION smartlot_set_vehicle_type_from_model ();
