@@ -1,3 +1,5 @@
+-- Vista parcial histórica: no usar este archivo para restaurar la base.
+-- Baseline completo: ../database/schema.sql. Procedencia: ../database/README.md.
 -- ============================================================
 -- TABLAS
 -- ============================================================
