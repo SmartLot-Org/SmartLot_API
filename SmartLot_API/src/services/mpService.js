@@ -170,14 +170,18 @@ export const verifySignature = (req) => {
   }
 };
 
-export const refundPayment = async (paymentId, amount) => {
+export const refundPayment = async (paymentId, amount, idempotencyKey) => {
   const refund = new PaymentRefund(client);
+  const requestOptions = idempotencyKey ? { idempotencyKey } : undefined;
 
-  const body = amount ? { amount: Number(amount) } : {};
+  if (amount === undefined) {
+    return await refund.total({ payment_id: paymentId, requestOptions });
+  }
 
   return await refund.create({
     payment_id: paymentId,
-    body
+    body: { amount: Number(amount) },
+    requestOptions
   });
 };
 

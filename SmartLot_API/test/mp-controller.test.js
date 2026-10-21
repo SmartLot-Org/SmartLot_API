@@ -8,7 +8,8 @@ const state = {
   queries: [],
   pgRow: { id: 'pago-1', mp_payment_id: 'PAY-1' },
   webhookValid: true,
-  failNextSearch: false
+  failNextSearch: false,
+  paymentOverrides: {}
 };
 
 mock.module('../src/services/mpService.js', {
@@ -28,7 +29,8 @@ mock.module('../src/services/mpService.js', {
         currency_id: 'ARS',
         external_reference: 'ORD-42',
         preference_id: 'pref-123',
-        date_approved: new Date().toISOString()
+        date_approved: new Date().toISOString(),
+        ...state.paymentOverrides
       };
     },
     verifySignature: () => state.webhookValid,
@@ -65,6 +67,7 @@ test.beforeEach(() => {
   state.queries.length = 0;
   state.pgRow = { id: 'pago-1', mp_payment_id: 'PAY-1' };
   state.webhookValid = true;
+  state.paymentOverrides = {};
 });
 
 function findQuery(sqlPart) {
@@ -158,33 +161,16 @@ test('POST /webhook payment.refunded actualiza estado refunded', async () => {
   assert.equal(update.params[0], 'refunded');
 });
 
-test('POST /:paymentId/refund reembolsa, inserta reembolso y actualiza estado', async () => {
+test('POST /webhook payment.refunded conserva estado parcial cuando queda saldo', async () => {
+  state.paymentOverrides = { transaction_amount: 1500, amount_refunded: 500 };
   const res = await request(app)
-    .post('/PAY-9/refund')
-    .send({ amount: 500, motivo: 'Cliente cancelo' });
+    .post('/webhook')
+    .send({ id: 'evt-partial', type: 'payment.refunded', data: { id: 'PAY-123' } });
 
-  assert.equal(res.status, 201);
-  assert.deepEqual(res.body, { refundId: 'refund-1', status: 'approved', amount: 500 });
-  assert.deepEqual(state.serviceCalls[0], ['refundPayment', 'PAY-9', 500]);
-  assert.deepEqual(state.serviceCalls[1], ['getPayment', 'PAY-9']);
-  const insert = findQuery('INSERT INTO reembolsos');
-  assert.ok(insert);
-  assert.equal(insert.params[1], 500);
-  assert.equal(insert.params[4], 'Cliente cancelo');
+  assert.equal(res.status, 200);
   const update = findQuery('SET mp_payment_status = $1');
   assert.ok(update);
-  assert.equal(update.params[0], 'refunded');
-});
-
-test('POST /:paymentId/refund total (sin amount) usa monto del pago', async () => {
-  const res = await request(app).post('/PAY-9/refund').send({});
-
-  assert.equal(res.status, 201);
-  assert.equal(res.body.amount, 1500);
-  assert.deepEqual(state.serviceCalls[0], ['refundPayment', 'PAY-9', undefined]);
-  const insert = findQuery('INSERT INTO reembolsos');
-  assert.equal(insert.params[1], 1500);
-  assert.equal(insert.params[4], 'Solicitado por usuario');
+  assert.equal(update.params[0], 'partially_refunded');
 });
 
 test('GET / pasa filtros de busqueda', async () => {

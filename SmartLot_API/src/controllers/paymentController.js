@@ -3,12 +3,13 @@ import {
   createPreference,
   getPayment,
   verifySignature,
-  refundPayment,
   searchPayments,
   isSandbox
 } from '../services/mpService.js';
 import pool from '../database/db.js';
 import { isValidId } from '../helpers/validatorHelper.js';
+import { requireRole } from '../middlewares/rolesMiddleware.js';
+import { executeManualRefund } from '../services/manualRefundService.js';
 
 const router = Router();
 
@@ -171,6 +172,19 @@ async function updatePaymentStatus(mpPaymentId, status, metadata = {}) {
   `;
   const result = await pool.query(query, [status, JSON.stringify(metadata), mpPaymentId]);
   return result.rows[0];
+}
+
+function paymentStatusAfterRefund(payment) {
+  const total = Number(payment?.transaction_amount);
+  let refunded = Number(payment?.amount_refunded);
+  if (!Number.isFinite(refunded) && Array.isArray(payment?.refunds)) {
+    refunded = payment.refunds
+      .filter((refund) => String(refund?.status || '').toLowerCase() === 'approved')
+      .reduce((sum, refund) => sum + Number(refund?.amount || 0), 0);
+  }
+  return Number.isFinite(total) && total > 0 && Number.isFinite(refunded) && refunded > 0 && refunded < total
+    ? 'partially_refunded'
+    : 'refunded';
 }
 
 async function logWebhookEvent(eventData) {
@@ -443,7 +457,7 @@ router.post('/webhook', async (req, res, next) => {
       }
     } else if (tipoEvento === 'payment.refunded') {
       const payment = await getPayment(data.id);
-      await updatePaymentStatus(data.id, 'refunded', { refundedAt: new Date().toISOString() });
+      await updatePaymentStatus(data.id, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
     }
 
     await markWebhookProcessed(mpEventId);
@@ -458,41 +472,19 @@ router.post('/webhook', async (req, res, next) => {
   }
 });
 
-router.post('/:paymentId/refund', async (req, res, next) => {
+router.post('/:paymentId/refund', requireRole(4), async (req, res, next) => {
   try {
     const { paymentId } = req.params;
-    const { amount, motivo } = req.body;
-
-    if (!paymentId) {
-      throwError('paymentId is required', 400);
-    }
-
-    const refund = await refundPayment(paymentId, amount);
-
-    const payment = await getPayment(paymentId);
-
-    await pool.query(
-      `INSERT INTO reembolsos (id_pago, mp_refund_id, monto, moneda, estado, motivo, metadata)
-       SELECT id, $1, $2, $3, $4, $5, $6
-       FROM pagos WHERE mp_payment_id = $7`,
-      [
-        refund.id,
-        amount || payment.transaction_amount,
-        payment.currency_id,
-        refund.status,
-        motivo || 'Solicitado por usuario',
-        JSON.stringify(refund),
-        paymentId
-      ]
-    );
-
-    await updatePaymentStatus(paymentId, 'refunded', { refundId: refund.id, refundedAt: new Date().toISOString() });
-
-    res.status(201).json({
-      refundId: refund.id,
-      status: refund.status,
-      amount: refund.amount
+    const body = req.body || {};
+    const { amount, motivo } = body;
+    const result = await executeManualRefund({
+      paymentId,
+      amount,
+      amountProvided: Object.prototype.hasOwnProperty.call(body, 'amount'),
+      motivo,
+      actorUserId: req.usuario.id
     });
+    res.status(result.httpStatus).json(result.body);
   } catch (err) {
     next(err);
   }

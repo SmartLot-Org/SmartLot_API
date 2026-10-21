@@ -20,7 +20,8 @@ mock.module('mercadopago', {
     },
     PaymentRefund: class {
       constructor(client) { this.client = client; }
-      async create({ payment_id, body }) { calls.refund.push({ payment_id, body }); return { id: 'refund-1', status: 'approved', amount: body.amount ?? 100 }; }
+      async create({ payment_id, body, requestOptions }) { calls.refund.push({ kind: 'partial', payment_id, body, requestOptions }); return { id: 'refund-1', status: 'approved', amount: body.amount }; }
+      async total({ payment_id, requestOptions }) { calls.refund.push({ kind: 'total', payment_id, requestOptions }); return { id: 'refund-1', status: 'approved', amount: 100 }; }
     }
   }
 });
@@ -175,15 +176,15 @@ test('verifySignature usa data.id del body cuando no viene en query', () => {
   assert.equal(ok, true);
 });
 
-test('refundPayment total envia body vacio', async () => {
-  const refund = await refundPayment('PAY-1');
+test('refundPayment total usa la operacion total e idempotencia', async () => {
+  const refund = await refundPayment('PAY-1', undefined, 'refund-key');
   assert.equal(refund.id, 'refund-1');
-  assert.deepEqual(calls.refund, [{ payment_id: 'PAY-1', body: {} }]);
+  assert.deepEqual(calls.refund, [{ kind: 'total', payment_id: 'PAY-1', requestOptions: { idempotencyKey: 'refund-key' } }]);
 });
 
 test('refundPayment parcial envia el monto', async () => {
-  await refundPayment('PAY-1', '250.75');
-  assert.deepEqual(calls.refund, [{ payment_id: 'PAY-1', body: { amount: 250.75 } }]);
+  await refundPayment('PAY-1', '250.75', 'refund-key');
+  assert.deepEqual(calls.refund, [{ kind: 'partial', payment_id: 'PAY-1', body: { amount: 250.75 }, requestOptions: { idempotencyKey: 'refund-key' } }]);
 });
 
 test('searchPayments construye los filtros', async () => {
