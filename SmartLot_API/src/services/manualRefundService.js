@@ -1,8 +1,8 @@
 import crypto from 'crypto';
 import pool from '../database/db.js';
 import { getPayment, refundPayment } from './mpService.js';
-
-const CONFIRMED_REFUND_STATUSES = new Set(['approved']);
+import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
+import { CONFIRMED_REFUND_STATUSES, readProviderRefundState } from './paymentRefundState.js';
 
 function fail(message, statusCode, code) {
   const error = new Error(message);
@@ -176,8 +176,8 @@ function idempotentResponse(refund) {
   };
 }
 
-function validateProviderPayment(localPayment, providerPayment, paymentId) {
-  if (!providerPayment || String(providerPayment.id) !== paymentId) {
+async function validateProviderPayment(localPayment, providerPayment, paymentId) {
+  if (!await providerPaymentMatchesLocal(providerPayment, localPayment, paymentId)) {
     fail('Mercado Pago devolvio un recurso distinto al pago local.', 409, 'inconsistent_payment');
   }
 
@@ -189,24 +189,19 @@ function validateProviderPayment(localPayment, providerPayment, paymentId) {
   if (String(localPayment.moneda || '') !== String(providerPayment.currency_id || '')) {
     fail('La moneda local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
   }
-  if (localPayment.mp_preference_id && String(providerPayment.preference_id || '') !== String(localPayment.mp_preference_id)) {
-    fail('La preferencia local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
-  }
-  if (localPayment.id_orden_externa && String(providerPayment.external_reference || '') !== String(localPayment.id_orden_externa)) {
-    fail('La orden externa local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
-  }
-
   return localAmount;
 }
 
-function providerRefundedCents(providerPayment) {
-  if (providerPayment.amount_refunded !== undefined && providerPayment.amount_refunded !== null) {
-    return moneyToCents(providerPayment.amount_refunded, 'El monto reembolsado de Mercado Pago');
+function providerRefundState(providerPayment) {
+  const state = readProviderRefundState(providerPayment);
+  if (!state.known || !state.valid) {
+    fail(
+      'Mercado Pago no informo un saldo reembolsable consistente.',
+      409,
+      'inconsistent_provider_refund_state'
+    );
   }
-  if (!Array.isArray(providerPayment.refunds)) return 0;
-  return providerPayment.refunds
-    .filter((refund) => CONFIRMED_REFUND_STATUSES.has(String(refund.status || '').toLowerCase()))
-    .reduce((sum, refund) => sum + moneyToCents(refund.amount, 'Un reembolso de Mercado Pago'), 0);
+  return state;
 }
 
 async function persistConfirmedRefund({ localPayment, refund, actualCents, motivo, fingerprint, actorUserId, paymentStatus }) {
@@ -281,14 +276,22 @@ export async function executeManualRefund({ paymentId, amount, amountProvided, m
   }
 
   const providerPayment = await getPayment(normalizedPaymentId);
-  const totalCents = validateProviderPayment(localPayment, providerPayment, normalizedPaymentId);
+  const totalCents = await validateProviderPayment(localPayment, providerPayment, normalizedPaymentId);
   const providerStatus = String(providerPayment.status || '').toLowerCase();
   if (!['approved', 'partially_refunded'].includes(providerStatus) && providerStatus !== 'refunded') {
     fail('El pago no esta en un estado reembolsable confirmado por Mercado Pago.', 409, 'payment_not_refundable');
   }
-  const refundedBeforeCents = Math.max(locallyRefundedCents, providerRefundedCents(providerPayment));
+  const refundState = providerRefundState(providerPayment);
+  if (providerStatus === 'refunded' && refundState.classification === 'none') {
+    fail(
+      'El estado y el acumulado de reembolsos de Mercado Pago se contradicen.',
+      409,
+      'inconsistent_provider_refund_state'
+    );
+  }
+  const refundedBeforeCents = Math.max(locallyRefundedCents, refundState.refundedCents);
   const availableCents = totalCents - refundedBeforeCents;
-  if (availableCents <= 0 || providerStatus === 'refunded') {
+  if (availableCents <= 0) {
     if (confirmedRefunds[0]) return idempotentResponse(confirmedRefunds[0]);
     fail('Mercado Pago informa que el pago ya fue reembolsado totalmente.', 409, 'payment_already_refunded');
   }

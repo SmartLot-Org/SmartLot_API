@@ -1,5 +1,6 @@
 import pool from '../database/db.js';
-import { getMerchantOrder, getPayment, searchPayments } from './mpService.js';
+import { getPayment, searchPayments } from './mpService.js';
+import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
 
 const READ_ROLES = Object.freeze({ ADMIN: 1, EMPLOYEE: 2, SUPERADMIN: 4 });
 const MAX_PAGE_SIZE = 100;
@@ -123,7 +124,12 @@ const AUTHORIZED_PAYMENTS_CTE = `
             END
           ) AS ref(value)
           LEFT JOIN consumos_reserva c
-            ON c.id = CASE WHEN ref.value ~ '^[1-9][0-9]*$' THEN ref.value::bigint ELSE NULL END
+            ON c.id = CASE
+                        WHEN ref.value ~ '^[1-9][0-9]{0,18}$'
+                             AND (LENGTH(ref.value) < 19 OR ref.value <= '9223372036854775807')
+                          THEN ref.value::bigint
+                        ELSE NULL
+                      END
           LEFT JOIN sedes gs ON gs.id = c.id_sede
       ) gc ON TRUE
   ), coherent_payments AS (
@@ -144,12 +150,15 @@ const AUTHORIZED_PAYMENTS_CTE = `
                   AND (
                     NOT (COALESCE(pc.metadata, '{}'::jsonb) ? 'id_reserva')
                     OR (
-                      (pc.metadata->>'id_reserva') ~ '^[1-9][0-9]*$'
-                      AND CASE
-                            WHEN (pc.metadata->>'id_reserva') ~ '^[1-9][0-9]*$'
-                              THEN (pc.metadata->>'id_reserva')::bigint
-                            ELSE NULL
-                          END = pc.id_reserva
+                      CASE
+                        WHEN (pc.metadata->>'id_reserva') ~ '^[1-9][0-9]{0,9}$'
+                             AND (
+                               LENGTH(pc.metadata->>'id_reserva') < 10
+                               OR (pc.metadata->>'id_reserva') <= '2147483647'
+                             )
+                          THEN (pc.metadata->>'id_reserva')::integer
+                        ELSE NULL
+                      END = pc.id_reserva
                     )
                   )
                   AND (
@@ -306,35 +315,6 @@ async function authorizedPaymentByProviderId(user, paymentId) {
   return result.rows[0] ?? null;
 }
 
-function providerBasicsMatchLocal(payment, local, expectedPaymentId = null) {
-  if (!payment || !local) return false;
-  if (expectedPaymentId && String(payment.id) !== String(expectedPaymentId)) return false;
-  if (local.mp_payment_id && String(payment.id) !== String(local.mp_payment_id)) return false;
-  if (local.id_orden_externa && String(payment.external_reference || '') !== String(local.id_orden_externa)) return false;
-  return true;
-}
-
-async function providerMatchesLocal(payment, local, expectedPaymentId = null) {
-  if (!providerBasicsMatchLocal(payment, local, expectedPaymentId)) return false;
-  if (!local.mp_preference_id) return true;
-
-  // Algunas respuestas historicas incluyen preference_id directamente. La
-  // respuesta tipada actual de Payments no lo garantiza: en Checkout Pro la
-  // asociacion confiable se resuelve mediante la merchant order del proveedor.
-  if (payment.preference_id !== undefined && payment.preference_id !== null) {
-    return String(payment.preference_id) === String(local.mp_preference_id);
-  }
-  const merchantOrderId = payment.order?.id;
-  if (!merchantOrderId) return false;
-  const merchantOrder = await getMerchantOrder(merchantOrderId);
-  const orderPaymentIds = Array.isArray(merchantOrder?.payments)
-    ? merchantOrder.payments.map((item) => String(item?.id))
-    : [];
-  return String(merchantOrder?.preference_id || '') === String(local.mp_preference_id)
-    && String(merchantOrder?.external_reference || '') === String(local.id_orden_externa || '')
-    && orderPaymentIds.includes(String(payment.id));
-}
-
 async function updateAuthorizedLocalPayment(local, payment) {
   const summary = {
     id: String(payment.id),
@@ -360,9 +340,9 @@ async function updateAuthorizedLocalPayment(local, payment) {
             metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('_mp_payment_summary', $8::jsonb),
             fecha_actualizacion = NOW()
       WHERE id = $9
-        AND (mp_payment_id IS NULL OR mp_payment_id = $1)
-        AND mp_preference_id = $10
-        AND id_orden_externa = $11
+        AND mp_payment_id IS NOT DISTINCT FROM $12
+        AND mp_preference_id IS NOT DISTINCT FROM $10
+        AND id_orden_externa IS NOT DISTINCT FROM $11
       RETURNING id`,
     [
       String(payment.id),
@@ -375,7 +355,8 @@ async function updateAuthorizedLocalPayment(local, payment) {
       JSON.stringify(summary),
       local.id,
       local.mp_preference_id,
-      local.id_orden_externa
+      local.id_orden_externa,
+      local.mp_payment_id
     ]
   );
   if (result.rowCount !== 1) throw httpError('El pago local cambio durante la verificacion.', 409, 'payment_sync_conflict');
@@ -399,7 +380,7 @@ async function synchronizeByReference(user, filters) {
   const matches = [];
   if (Array.isArray(providerPayments)) {
     for (const payment of providerPayments) {
-      if (await providerMatchesLocal(payment, local)) matches.push(payment);
+      if (await providerPaymentMatchesLocal(payment, local)) matches.push(payment);
     }
   }
   if (matches.length === 0) return;
@@ -470,7 +451,7 @@ export async function getAuthorizedPayment(user, rawPaymentId, rawQuery = {}) {
   }
 
   const payment = await getPayment(paymentId);
-  if (!await providerMatchesLocal(payment, local, paymentId)) {
+  if (!await providerPaymentMatchesLocal(payment, local, paymentId)) {
     throw httpError(
       pendingLookup ? 'Pago no encontrado.' : 'El proveedor devolvio referencias contradictorias para el pago local.',
       pendingLookup ? 404 : 409,

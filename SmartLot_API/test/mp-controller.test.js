@@ -141,6 +141,7 @@ test('POST /webhook con firma invalida -> 400 sin efectos', async () => {
 });
 
 test('POST /webhook payment.refunded actualiza estado refunded', async () => {
+  state.paymentOverrides = { transaction_amount_refunded: 1500 };
   const res = await request(app)
     .post('/webhook')
     .send({ id: 'evt-3', type: 'payment.refunded', data: { id: 'PAY-123' } });
@@ -152,7 +153,11 @@ test('POST /webhook payment.refunded actualiza estado refunded', async () => {
 });
 
 test('POST /webhook payment.refunded conserva estado parcial cuando queda saldo', async () => {
-  state.paymentOverrides = { transaction_amount: 1500, amount_refunded: 500 };
+  state.paymentOverrides = {
+    transaction_amount: 1500,
+    transaction_amount_refunded: 500,
+    amount_refunded: 1500
+  };
   const res = await request(app)
     .post('/webhook')
     .send({ id: 'evt-partial', type: 'payment.refunded', data: { id: 'PAY-123' } });
@@ -161,4 +166,37 @@ test('POST /webhook payment.refunded conserva estado parcial cuando queda saldo'
   const update = findQuery('SET mp_payment_status = $1');
   assert.ok(update);
   assert.equal(update.params[0], 'partially_refunded');
+});
+
+test('POST /webhook no marca total si falta o contradice el acumulado reembolsado', async () => {
+  for (const paymentOverrides of [
+    {},
+    { transaction_amount_refunded: null },
+    { transaction_amount_refunded: 1501 }
+  ]) {
+    state.paymentOverrides = paymentOverrides;
+    state.queries.length = 0;
+    const res = await request(app)
+      .post('/webhook')
+      .send({ id: `evt-invalid-${state.queries.length}`, type: 'payment.refunded', data: { id: 'PAY-123' } });
+
+    assert.equal(res.status, 409);
+    assert.equal(findQuery('SET mp_payment_status = $1'), undefined);
+  }
+});
+
+test('POST /webhook fallback considera solo refunds aprobados y evita duplicados', async () => {
+  state.paymentOverrides = {
+    refunds: [
+      { id: 'r-1', status: 'approved', amount: 500 },
+      { id: 'r-1', status: 'approved', amount: 500 },
+      { id: 'r-2', status: 'pending', amount: 1000 }
+    ]
+  };
+  const res = await request(app)
+    .post('/webhook')
+    .send({ id: 'evt-refunds-fallback', type: 'payment.refunded', data: { id: 'PAY-123' } });
+
+  assert.equal(res.status, 200);
+  assert.equal(findQuery('SET mp_payment_status = $1').params[0], 'partially_refunded');
 });

@@ -13,6 +13,7 @@ const state = {
   localPayment: null,
   refunds: [],
   providerPayment: null,
+  merchantOrder: null,
   refundResponse: null,
   providerError: null,
   serviceCalls: [],
@@ -43,7 +44,7 @@ function validProviderPayment(overrides = {}) {
     id: PAYMENT_ID,
     status: 'approved',
     transaction_amount: 1500,
-    amount_refunded: 0,
+    transaction_amount_refunded: 0,
     currency_id: 'ARS',
     external_reference: 'ORD-42',
     preference_id: 'pref-123',
@@ -111,7 +112,10 @@ mock.module('../src/services/mpService.js', {
       if (state.providerError) throw state.providerError;
       return state.providerPayment;
     },
-    getMerchantOrder: async () => null,
+    getMerchantOrder: async (orderId) => {
+      state.serviceCalls.push(['getMerchantOrder', String(orderId)]);
+      return state.merchantOrder;
+    },
     verifySignature: () => true,
     refundPayment: async (paymentId, amount, idempotencyKey) => {
       state.serviceCalls.push(['refundPayment', paymentId, amount, idempotencyKey]);
@@ -152,6 +156,7 @@ test.beforeEach(() => {
   state.localPayment = validLocalPayment();
   state.refunds = [];
   state.providerPayment = validProviderPayment();
+  state.merchantOrder = null;
   state.refundResponse = { id: 'refund-1', status: 'approved', amount: 1500 };
   state.providerError = null;
   state.serviceCalls.length = 0;
@@ -265,6 +270,46 @@ test('superadmin puede reembolsar totalmente un pago valido y se registra el imp
   assert.equal(state.writes.some((entry) => entry.sql.includes('reservas')), false);
 });
 
+test('pago sin preference_id en Payment se correlaciona por merchant order antes de reembolsar', async () => {
+  state.providerPayment = validProviderPayment({ preference_id: undefined, order: { id: 'merchant-42' } });
+  state.merchantOrder = {
+    id: 'merchant-42',
+    preference_id: 'pref-123',
+    external_reference: 'ORD-42',
+    payments: [{ id: PAYMENT_ID }]
+  };
+
+  const res = await request(app)
+    .post(`/api/payments/${PAYMENT_ID}/refund`)
+    .set(asUser(4))
+    .send({ amount: 500 });
+
+  assert.equal(res.status, 201);
+  assert.deepEqual(state.serviceCalls.slice(0, 3).map((call) => call[0]), [
+    'getPayment', 'getMerchantOrder', 'refundPayment'
+  ]);
+  assert.equal(state.writes.some((entry) => entry.sql.includes('INSERT INTO reembolsos')), true);
+});
+
+test('merchant order ausente o contradictoria impide el reembolso', async () => {
+  state.providerPayment = validProviderPayment({ preference_id: undefined, order: { id: 'merchant-42' } });
+  state.merchantOrder = {
+    id: 'merchant-42',
+    preference_id: 'pref-otra',
+    external_reference: 'ORD-42',
+    payments: [{ id: PAYMENT_ID }]
+  };
+
+  const res = await request(app)
+    .post(`/api/payments/${PAYMENT_ID}/refund`)
+    .set(asUser(4))
+    .send({ amount: 500 });
+
+  assert.equal(res.status, 409);
+  assert.deepEqual(state.serviceCalls.map((call) => call[0]), ['getPayment', 'getMerchantOrder']);
+  assert.deepEqual(state.writes, []);
+});
+
 test('reembolso parcial no deja el pago registrado como total', async () => {
   state.refundResponse = { id: 'refund-partial', status: 'approved', amount: 500 };
   const res = await request(app)
@@ -279,13 +324,91 @@ test('reembolso parcial no deja el pago registrado como total', async () => {
 });
 
 test('importe superior al saldo confiable se rechaza antes de solicitar el reembolso', async () => {
-  state.providerPayment = validProviderPayment({ amount_refunded: 1200 });
+  state.providerPayment = validProviderPayment({ transaction_amount_refunded: 1200 });
   const res = await request(app)
     .post(`/api/payments/${PAYMENT_ID}/refund`)
     .set(asUser(4))
     .send({ amount: 301 });
   assert.equal(res.status, 400);
   assert.deepEqual(state.serviceCalls, [['getPayment', PAYMENT_ID]]);
+  assert.deepEqual(state.writes, []);
+});
+
+test('saldo parcial usa transaction_amount_refunded y conserva el remanente', async () => {
+  state.providerPayment = validProviderPayment({
+    status: 'refunded',
+    transaction_amount_refunded: 500,
+    amount_refunded: 1500
+  });
+  state.refundResponse = { id: 'refund-remaining', status: 'approved', amount: 1000 };
+
+  const res = await request(app)
+    .post(`/api/payments/${PAYMENT_ID}/refund`)
+    .set(asUser(4))
+    .send({});
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.amount, 1000);
+  assert.equal(state.serviceCalls.find((call) => call[0] === 'refundPayment')[2], undefined);
+  const update = state.writes.find((entry) => entry.sql.includes('UPDATE pagos'));
+  assert.equal(update.params[0], 'refunded');
+});
+
+test('acumulado ausente, nulo o contradictorio no se interpreta como reembolso total', async () => {
+  for (const overrides of [
+    { transaction_amount_refunded: undefined },
+    { transaction_amount_refunded: null },
+    { transaction_amount_refunded: 1501 }
+  ]) {
+    state.providerPayment = validProviderPayment(overrides);
+    if (overrides.transaction_amount_refunded === undefined) {
+      delete state.providerPayment.transaction_amount_refunded;
+    }
+    state.serviceCalls.length = 0;
+    state.writes.length = 0;
+
+    const res = await request(app)
+      .post(`/api/payments/${PAYMENT_ID}/refund`)
+      .set(asUser(4))
+      .send({ amount: 100 });
+
+    assert.equal(res.status, 409);
+    assert.deepEqual(state.serviceCalls.map((call) => call[0]), ['getPayment']);
+    assert.deepEqual(state.writes, []);
+  }
+});
+
+test('fallback de refunds suma solo aprobados y no duplica el mismo reembolso', async () => {
+  state.providerPayment = validProviderPayment();
+  delete state.providerPayment.transaction_amount_refunded;
+  state.providerPayment.refunds = [
+    { id: 'r-1', status: 'approved', amount: 500 },
+    { id: 'r-1', status: 'approved', amount: 500 },
+    { id: 'r-pending', status: 'pending', amount: 900 }
+  ];
+  state.refundResponse = { id: 'refund-balance', status: 'approved', amount: 1000 };
+
+  const res = await request(app)
+    .post(`/api/payments/${PAYMENT_ID}/refund`)
+    .set(asUser(4))
+    .send({ amount: 1000 });
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.amount, 1000);
+});
+
+test('fallback sin identidad de reembolso se considera insuficiente', async () => {
+  state.providerPayment = validProviderPayment();
+  delete state.providerPayment.transaction_amount_refunded;
+  state.providerPayment.refunds = [{ status: 'approved', amount: 500 }];
+
+  const res = await request(app)
+    .post(`/api/payments/${PAYMENT_ID}/refund`)
+    .set(asUser(4))
+    .send({ amount: 100 });
+
+  assert.equal(res.status, 409);
+  assert.deepEqual(state.serviceCalls.map((call) => call[0]), ['getPayment']);
   assert.deepEqual(state.writes, []);
 });
 

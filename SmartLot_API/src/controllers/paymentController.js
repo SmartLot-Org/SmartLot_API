@@ -14,6 +14,7 @@ import {
   listAuthorizedPayments,
   listWebhookEvents
 } from '../services/paymentReadService.js';
+import { readProviderRefundState } from '../services/paymentRefundState.js';
 
 const router = Router();
 
@@ -179,16 +180,14 @@ async function updatePaymentStatus(mpPaymentId, status, metadata = {}) {
 }
 
 function paymentStatusAfterRefund(payment) {
-  const total = Number(payment?.transaction_amount);
-  let refunded = Number(payment?.amount_refunded);
-  if (!Number.isFinite(refunded) && Array.isArray(payment?.refunds)) {
-    refunded = payment.refunds
-      .filter((refund) => String(refund?.status || '').toLowerCase() === 'approved')
-      .reduce((sum, refund) => sum + Number(refund?.amount || 0), 0);
+  const state = readProviderRefundState(payment);
+  if (!state.known || !state.valid || state.classification === 'none') {
+    const error = new Error('Mercado Pago no informo un acumulado de reembolsos consistente.');
+    error.statusCode = 409;
+    error.code = 'inconsistent_provider_refund_state';
+    throw error;
   }
-  return Number.isFinite(total) && total > 0 && Number.isFinite(refunded) && refunded > 0 && refunded < total
-    ? 'partially_refunded'
-    : 'refunded';
+  return state.classification === 'partial' ? 'partially_refunded' : 'refunded';
 }
 
 async function logWebhookEvent(eventData) {

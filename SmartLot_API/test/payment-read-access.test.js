@@ -169,8 +169,11 @@ mock.module('../src/database/db.js', {
         return { rows: row ? [clone(row)] : [], rowCount: row ? 1 : 0 };
       }
       if (sql.includes('payment_access:sync_authorized')) {
-        const local = state.payments.find((p) => p.id === params[8] && p.mp_preference_id === params[9] && p.id_orden_externa === params[10]);
-        if (!local || (local.mp_payment_id && local.mp_payment_id !== params[0])) return { rows: [], rowCount: 0 };
+        const local = state.payments.find((p) => p.id === params[8]
+          && p.mp_preference_id === params[9]
+          && p.id_orden_externa === params[10]
+          && p.mp_payment_id === params[11]);
+        if (!local) return { rows: [], rowCount: 0 };
         state.writes.push({ sql, params: clone(params) });
         Object.assign(local, {
           mp_payment_id: params[0], mp_payment_status: params[1], mp_payment_type: params[2],
@@ -372,6 +375,26 @@ test('empleado verifica pago propio tras checkout antes del webhook usando prefe
   assert.deepEqual(state.providerCalls, [['getPayment', '500'], ['getMerchantOrder', 'merchant-500']]);
   assert.equal(state.writes.length, 1);
   assert.equal(state.payments.find((p) => p.id === 'pending-employee').mp_payment_id, '500');
+});
+
+test('empleado consulta pago historico propio con preferencia nula sin abrir el ajeno', async () => {
+  const historical = state.payments.find((p) => p.id === 'local-100');
+  historical.mp_preference_id = null;
+  const provider = state.providerPayments.find((p) => p.id === '100');
+  provider._expectedPreferenceId = null;
+
+  const own = await get('/api/payments/100', 2);
+  assert.equal(own.status, 200);
+  assert.equal(own.body.payment.id, '100');
+  assert.deepEqual(state.providerCalls, [['getPayment', '100']]);
+  assert.equal(state.writes.length, 1);
+
+  state.providerCalls.length = 0;
+  state.writes.length = 0;
+  const foreign = await get('/api/payments/100', 7);
+  assert.equal(foreign.status, 404);
+  assert.deepEqual(state.providerCalls, []);
+  assert.deepEqual(state.writes, []);
 });
 
 test('admin verifica pago agrupado autorizado por referencia antes del webhook', async () => {
