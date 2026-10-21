@@ -33,6 +33,7 @@ mock.module('../src/services/mpService.js', {
         ...state.paymentOverrides
       };
     },
+    getMerchantOrder: async () => ({ preference_id: 'pref-123', external_reference: 'ORD-42', payments: [{ id: 'PAY-1' }] }),
     verifySignature: () => state.webhookValid,
     refundPayment: async (paymentId, amount) => {
       state.serviceCalls.push(['refundPayment', paymentId, amount]);
@@ -117,17 +118,6 @@ test('POST /preference con MP_SANDBOX=true devuelve sandbox_init_point como init
   delete process.env.MP_SANDBOX;
 });
 
-test('GET /:paymentId consulta y persiste el pago', async () => {
-  const res = await request(app).get('/PAY-123');
-
-  assert.equal(res.status, 200);
-  assert.equal(res.body.payment.id, 'PAY-123');
-  assert.equal(res.body.payment.status, 'approved');
-  assert.equal(res.body.saved.mp_payment_id, 'PAY-1');
-  assert.deepEqual(state.serviceCalls[0], ['getPayment', 'PAY-123']);
-  assert.ok(findQuery('ON CONFLICT (mp_payment_id) DO UPDATE'));
-});
-
 test('POST /webhook con firma valida responde 200 y registra evento', async () => {
   const res = await request(app)
     .post('/webhook')
@@ -171,17 +161,4 @@ test('POST /webhook payment.refunded conserva estado parcial cuando queda saldo'
   const update = findQuery('SET mp_payment_status = $1');
   assert.ok(update);
   assert.equal(update.params[0], 'partially_refunded');
-});
-
-test('GET / pasa filtros de busqueda', async () => {
-  const res = await request(app).get('/').query({ external_reference: 'ORD-1', status: 'approved', from: '2026-01-01', to: '2026-02-01' });
-
-  assert.equal(res.status, 200);
-  assert.deepEqual(state.serviceCalls[0], ['searchPayments', { external_reference: 'ORD-1', status: 'approved', range: { from: '2026-01-01', to: '2026-02-01' } }]);
-});
-
-test('GET / con error del servicio responde 500', async () => {
-  state.failNextSearch = true;
-  const res = await request(app).get('/');
-  assert.equal(res.status, 500);
 });

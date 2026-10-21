@@ -1,4 +1,4 @@
-import { MercadoPagoConfig, Preference, Payment, PaymentRefund } from 'mercadopago';
+import { MercadoPagoConfig, Preference, Payment, PaymentRefund, MerchantOrder } from 'mercadopago';
 import crypto from 'crypto';
 
 const client = new MercadoPagoConfig({
@@ -183,6 +183,11 @@ export const refundPayment = async (paymentId, amount, idempotencyKey) => {
     body: { amount: Number(amount) },
     requestOptions
   });
+};
+
+export const getMerchantOrder = async (merchantOrderId) => {
+  const merchantOrder = new MerchantOrder(client);
+  return await merchantOrder.get({ merchantOrderId });
 };
 
 export const searchPayments = async (filters = {}) => {

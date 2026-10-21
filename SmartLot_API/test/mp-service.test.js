@@ -2,7 +2,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-const calls = { preference: [], payment: [], refund: [] };
+const calls = { preference: [], payment: [], merchantOrder: [], refund: [] };
 
 mock.module('mercadopago', {
   namedExports: {
@@ -18,6 +18,13 @@ mock.module('mercadopago', {
       async get({ id }) { calls.payment.push({ kind: 'get', id }); return { id, status: 'approved', status_detail: 'accredited', payment_type_id: 'credit_card', transaction_amount: 100, currency_id: 'ARS', external_reference: 'ORD-1', preference_id: 'pref-123', date_approved: new Date().toISOString() }; }
       async search({ options }) { calls.payment.push({ kind: 'search', options }); return { results: [{ id: 'p-1' }] }; }
     },
+    MerchantOrder: class {
+      constructor(client) { this.client = client; }
+      async get({ merchantOrderId }) {
+        calls.merchantOrder.push(merchantOrderId);
+        return { id: merchantOrderId, preference_id: 'pref-123', payments: [{ id: 123 }] };
+      }
+    },
     PaymentRefund: class {
       constructor(client) { this.client = client; }
       async create({ payment_id, body, requestOptions }) { calls.refund.push({ kind: 'partial', payment_id, body, requestOptions }); return { id: 'refund-1', status: 'approved', amount: body.amount }; }
@@ -26,11 +33,12 @@ mock.module('mercadopago', {
   }
 });
 
-const { createPreference, getPayment, verifySignature, refundPayment, searchPayments, isSandbox } = await import('../src/services/mpService.js');
+const { createPreference, getMerchantOrder, getPayment, verifySignature, refundPayment, searchPayments, isSandbox } = await import('../src/services/mpService.js');
 
 test.beforeEach(() => {
   calls.preference.length = 0;
   calls.payment.length = 0;
+  calls.merchantOrder.length = 0;
   calls.refund.length = 0;
 });
 
@@ -180,6 +188,12 @@ test('refundPayment total usa la operacion total e idempotencia', async () => {
   const refund = await refundPayment('PAY-1', undefined, 'refund-key');
   assert.equal(refund.id, 'refund-1');
   assert.deepEqual(calls.refund, [{ kind: 'total', payment_id: 'PAY-1', requestOptions: { idempotencyKey: 'refund-key' } }]);
+});
+
+test('getMerchantOrder resuelve la preferencia asociada al pago', async () => {
+  const result = await getMerchantOrder('mo-123');
+  assert.equal(result.preference_id, 'pref-123');
+  assert.deepEqual(calls.merchantOrder, ['mo-123']);
 });
 
 test('refundPayment parcial envia el monto', async () => {

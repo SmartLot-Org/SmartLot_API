@@ -111,6 +111,7 @@ mock.module('../src/services/mpService.js', {
       if (state.providerError) throw state.providerError;
       return state.providerPayment;
     },
+    getMerchantOrder: async () => null,
     verifySignature: () => true,
     refundPayment: async (paymentId, amount, idempotencyKey) => {
       state.serviceCalls.push(['refundPayment', paymentId, amount, idempotencyKey]);

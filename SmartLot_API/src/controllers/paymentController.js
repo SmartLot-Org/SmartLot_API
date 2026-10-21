@@ -3,13 +3,17 @@ import {
   createPreference,
   getPayment,
   verifySignature,
-  searchPayments,
   isSandbox
 } from '../services/mpService.js';
 import pool from '../database/db.js';
 import { isValidId } from '../helpers/validatorHelper.js';
 import { requireRole } from '../middlewares/rolesMiddleware.js';
 import { executeManualRefund } from '../services/manualRefundService.js';
+import {
+  getAuthorizedPayment,
+  listAuthorizedPayments,
+  listWebhookEvents
+} from '../services/paymentReadService.js';
 
 const router = Router();
 
@@ -341,91 +345,24 @@ router.post('/preference', async (req, res, next) => {
   }
 });
 
-router.get('/webhook-events', async (req, res, next) => {
+router.get('/webhook-events', requireRole(4), async (req, res, next) => {
   try {
-    const { procesado, limite = 100 } = req.query;
-
-    const params = [];
-    let where = '';
-    if (procesado !== undefined) {
-      params.push(procesado === 'true' || procesado === '1');
-      where = ` WHERE procesado = $${params.length}`;
-    }
-    params.push(Math.min(Number(limite) || 100, 500));
-
-    const query = `
-      SELECT mp_event_id, tipo_evento, mp_payment_id, payload, firma_valida,
-             procesado, error_procesamiento, fecha_recepcion, fecha_procesamiento
-      FROM webhook_eventos
-      ${where}
-      ORDER BY fecha_recepcion DESC
-      LIMIT $${params.length}
-    `;
-
-    const result = await pool.query(query, params);
-
-    res.json({ eventos: result.rows });
+    res.json(await listWebhookEvents(req.query));
   } catch (err) {
     next(err);
   }
 });
 
-router.get('/:paymentId', async (req, res, next) => {
+router.get('/:paymentId', requireRole(1, 2, 4), async (req, res, next) => {
   try {
-    let { paymentId } = req.params;
-    paymentId = String(paymentId || '').trim();
-
-    if (!paymentId) {
-      throwError('paymentId is required', 400);
-    }
-
-    // Permitir UUID (preference_id) y numérico (payment_id). Mensaje claro si parece merchant_order/otro.
-    const isNumeric = /^\d+$/.test(paymentId);
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(paymentId);
-    const isUuidWithPrefix = /^\d+-[0-9a-f-]{10,}$/i.test(paymentId);
-    const looksComposite = paymentId.includes(';') || paymentId.includes('T') && paymentId.includes('UTC');
-    if (looksComposite && !isNumeric && !isUuid) {
-      return res.status(400).json({
-        error: true,
-        code: 'invalid_payment_id',
-        message: `El valor "${paymentId}" no es un payment_id válido (numérico) ni preference_id (UUID). Parece un merchant_order_id. Usa GET /api/payments?external_reference=TU_ORDER_ID o verifica el payment_id numérico del comprobante de MP.`,
-        statusCode: 400,
-        paymentId
-      });
-    }
-    // Si es UUID de preferencia, adelantar hint: el endpoint espera payment_id numérico
-    if ((isUuid || isUuidWithPrefix) && !isNumeric) {
-      // No bloqueamos (usuario pidió permitir UUID), pero avisamos en log
-      console.warn(`[MP] GET /:paymentId recibido UUID (posible preference_id) ${paymentId} - se intenta como payment_id; si es preferencia usa external_reference`);
-    }
-
-    const payment = await getPayment(paymentId);
-
-    const savedPayment = await savePaymentRecord(payment, req.usuario?.id_empresa);
-
-    res.json({
-      payment: {
-        id: payment.id,
-        status: payment.status,
-        statusDetail: payment.status_detail,
-        paymentType: payment.payment_type_id,
-        transactionAmount: payment.transaction_amount,
-        currency: payment.currency_id,
-        dateApproved: payment.date_approved,
-        externalReference: payment.external_reference,
-        preferenceId: payment.preference_id
-      },
-      saved: savedPayment
-    });
+    res.json(await getAuthorizedPayment(req.usuario, req.params.paymentId, req.query));
   } catch (err) {
-    // payment_not_found ya viene con statusCode 404 desde mpService
     if (err.statusCode === 404 || err.code === 'payment_not_found') {
       return res.status(404).json({
         error: true,
         code: err.code || 'payment_not_found',
-        message: err.message || `Pago ${req.params.paymentId} no encontrado en Mercado Pago. Si acabas de pagar, espera 5-10s y reintenta o usa ?external_reference=`,
-        statusCode: 404,
-        paymentId: err.paymentId || req.params.paymentId
+        message: 'Pago no encontrado.',
+        statusCode: 404
       });
     }
     next(err);
@@ -490,36 +427,10 @@ router.post('/:paymentId/refund', requireRole(4), async (req, res, next) => {
   }
 });
 
-router.get('/', async (req, res, next) => {
+router.get('/', requireRole(1, 2, 4), async (req, res, next) => {
   try {
-    const { external_reference, status, from, to } = req.query;
-
-    const filters = {};
-    if (external_reference) filters.external_reference = external_reference;
-    if (status) filters.status = status;
-    if (from || to) filters.range = { from, to };
-
-    const result = await searchPayments(filters);
-
-    // Sincronizar automáticamente pagos encontrados (sin webhook) → actualiza mp_payment_status en DB
-    const items = result?.results || result?.data || [];
-    if (external_reference && Array.isArray(items) && items.length > 0) {
-      for (const p of items) {
-        try {
-          if (p?.id && p?.status) {
-            await savePaymentRecord(p, req.usuario?.id_empresa);
-          }
-        } catch (syncErr) {
-          console.warn(`[MP] sync pagos failed for ${p?.id}:`, syncErr.message);
-        }
-      }
-    }
-
-    res.json(result);
+    res.json(await listAuthorizedPayments(req.usuario, req.query));
   } catch (err) {
-    if (err.statusCode === 404 || err.code === 'payment_not_found') {
-      return res.status(404).json({ error: true, code: err.code || 'payment_not_found', message: err.message, statusCode: 404 });
-    }
     next(err);
   }
 });
