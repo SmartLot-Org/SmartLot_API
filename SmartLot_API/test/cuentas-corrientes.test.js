@@ -1,7 +1,10 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import CuentaCorrienteService from '../src/services/cuentaCorrienteService.js';
+mock.module('../src/database/db.js', { defaultExport: {
+  query: async () => { throw new Error('La suite unitaria no debe consultar una base externa.'); }
+} });
+const { default: CuentaCorrienteService } = await import('../src/services/cuentaCorrienteService.js');
 
 const admin = { id: 10, id_rol: 1, id_empresa: 5 };
 const rows = [

@@ -9,6 +9,12 @@ const db = new PGlite();
 let tail = Promise.resolve();
 let calls = [];
 let provider = {};
+let providerById = new Map();
+let providerCalls = [];
+let searchResults = null;
+let searchPageSize = null;
+let searchCalls = [];
+let allowRefunds = false;
 let holdProvider;
 const pool = {
   query: (sql, params) => db.query(sql, params),
@@ -28,10 +34,24 @@ mock.module('../src/services/mpService.js', { namedExports: {
     if (holdProvider) await holdProvider;
     return { id: `pref-${reference}`, init_point: 'https://checkout.test', sandbox_init_point: 'https://sandbox.test' };
   },
-  refundPayment: async () => { throw new Error("No debe reembolsar en estas pruebas"); },
-  getPayment: async () => structuredClone(provider),
+  refundPayment: async (id, amount) => {
+    assert.equal(allowRefunds, true);
+    const payment = providerById.get(String(id)) || provider;
+    const refunded = amount ?? payment.transaction_amount;
+    providerById.set(String(id), { ...payment, transaction_amount_refunded: refunded });
+    return { id: `refund-${id}`, status: 'approved', amount: refunded };
+  },
+  getPayment: async id => {
+    providerCalls.push(String(id));
+    return structuredClone(providerById.get(String(id)) || provider);
+  },
   getMerchantOrder: async () => provider.merchantOrder || null,
-  searchPayments: async () => ({ results: [structuredClone(provider)] }),
+  searchPayments: async filters => {
+    searchCalls.push(structuredClone(filters));
+    const results = searchResults || [provider];
+    const offset = filters.offset || 0;
+    return { results: structuredClone(results.slice(offset, offset + (searchPageSize || results.length))), paging: { total: results.length } };
+  },
   isSandbox: () => true,
   verifySignature: () => true
 } });
@@ -65,6 +85,8 @@ test.before(async () => {
       mp_preference_id varchar(100) UNIQUE,mp_payment_id varchar(100) UNIQUE,mp_payment_status text DEFAULT 'pending',mp_payment_type text,
       monto numeric(12,2),moneda text,descripcion text,fecha_aprobacion timestamptz,fecha_creacion timestamptz DEFAULT now(),fecha_actualizacion timestamptz,
       metadata jsonb DEFAULT '{}');
+    CREATE TABLE reembolsos(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),id_pago uuid REFERENCES pagos(id),
+      mp_refund_id text UNIQUE,monto numeric,moneda text,estado text,motivo text,metadata jsonb,fecha_creacion timestamptz DEFAULT now());
     CREATE TABLE webhook_eventos(id uuid DEFAULT gen_random_uuid(),mp_event_id text UNIQUE,tipo_evento text,mp_payment_id text,payload jsonb,
       firma_valida boolean,procesado boolean,fecha_procesamiento timestamptz,error_procesamiento text);
     INSERT INTO empresas VALUES(10),(20);
@@ -74,9 +96,10 @@ test.before(async () => {
     INSERT INTO trato_empresa_garage VALUES(1,101,90000);
   `);
   await db.exec(await readFile(new URL('../migrations/20261022123341_seg03_enterprise_payment_orders.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../migrations/20261022130158_seg03_enterprise_payment_attempts.sql', import.meta.url), 'utf8'));
 });
 test.beforeEach(async () => {
-  calls = []; holdProvider = null;
+  calls = []; holdProvider = null; provider = {}; providerById = new Map(); providerCalls = []; searchResults = null; searchPageSize = null; searchCalls = []; allowRefunds = false;
   await db.exec(`TRUNCATE enterprise_payment_consumptions,enterprise_payment_orders,pagos,consumos_reserva,reservas CASCADE;
     INSERT INTO reservas VALUES(1,2,1),(2,2,1),(3,2,1),(4,2,1),(5,2,1),(6,2,1);
     INSERT INTO consumos_reserva(id,id_reserva,id_empresa,id_sede,id_garage,responsable_pago,importe_generado,fecha_inicio,fecha_fin,minutos_facturados,tarifa_hora_aplicada) VALUES
@@ -184,6 +207,7 @@ test('SQL impide reescribir expectativa, preferencia o asociaciones y conserva e
   await assert.rejects(db.query('UPDATE enterprise_payment_orders SET expected_amount=0.10'));
   await assert.rejects(db.query("UPDATE enterprise_payment_orders SET preference_id='otra'"));
   await assert.rejects(db.query('UPDATE enterprise_payment_consumptions SET consumption_id=2'));
+  await syncEnterprisePayment(approved(order));
   await syncEnterprisePayment({...approved(order),transaction_amount_refunded:1});
   await syncEnterprisePayment(approved(order));
   await syncEnterprisePayment(approved(order));
@@ -196,9 +220,11 @@ test('merchant order correlaciona preferencia ausente y rechaza una orden ajena'
   provider={...approved(order),preference_id:undefined,order:{id:10},merchantOrder:{preference_id:order.preferenceId,external_reference:order.orderId,payments:[{id:'900'}]}};
   await syncEnterprisePayment(provider);
   assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled,true);
+  const snapshot = (await db.query('SELECT provider_snapshot FROM enterprise_payment_orders')).rows[0].provider_snapshot;
   provider.merchantOrder.preference_id='otra';
   await syncEnterprisePayment(provider);
-  assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled,false);
+  assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled,true);
+  assert.deepEqual((await db.query('SELECT provider_snapshot FROM enterprise_payment_orders')).rows[0].provider_snapshot,snapshot);
 });
 
 test('reembolso manual previo impide cerrar con una respuesta vieja approved',async()=>{
@@ -217,4 +243,276 @@ test('timeout del proveedor conserva orden y claims y no permite otra preferenci
   await assert.rejects(createEnterprisePreference(admin,{consumosIds:[1]}),{statusCode:409});
   assert.equal(calls.length,1);
   assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_consumptions')).rows[0].count,1);
+});
+
+async function webhookAttempt(order, id, status) {
+  provider = { ...approved(order), id, status };
+  providerById.set(id, structuredClone(provider));
+  const response = await request(app).post('/webhook').send({ id: `attempt-${id}-${status}`, type: 'payment.updated', data: { id } });
+  assert.equal(response.status, 200, response.text);
+}
+
+test('regresion HTTP y SQL: rechazado 900 seguido de aprobado 901 salda el consumo', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'rejected');
+  await webhookAttempt(order, '901', 'approved');
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.payment_id, '901');
+  assert.equal(row.settled, true);
+  const movement = (await account()).items.flatMap(g => g.movimientos).find(m => m.idConsumo === 1);
+  assert.equal(movement.pagado, true);
+  assert.equal(movement.requiereRegularizacion, false);
+});
+
+test('regresion HTTP y SQL: aprobado 900 seguido de rechazado 901 conserva la liquidacion', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  await webhookAttempt(order, '901', 'rejected');
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.payment_id, '900');
+  assert.equal(row.settled, true);
+  const movement = (await account()).items.flatMap(g => g.movimientos).find(m => m.idConsumo === 1);
+  assert.equal(movement.pagado, true);
+  assert.equal(movement.requiereRegularizacion, false);
+});
+
+for (const [first, nextId] of [['pending', '901'], ['pending', '900']]) {
+  test(`HTTP: pendiente 900 seguido de aprobado ${nextId}`, async () => {
+    const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+    await webhookAttempt(order, '900', first);
+    const before = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+    assert.equal(before.accepted_payment_id, null);
+    assert.equal(before.payment_id, null);
+    assert.equal((await db.query('SELECT mp_payment_id FROM pagos')).rows[0].mp_payment_id, null);
+    await webhookAttempt(order, nextId, 'approved');
+    const after = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+    assert.equal(after.accepted_payment_id, nextId);
+    assert.equal(after.settled, true);
+  });
+}
+
+test('HTTP: aprobado 900 y pendiente 901 preserva toda la evidencia financiera de la orden', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  const before = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  await webhookAttempt(order, '901', 'pending');
+  assert.deepEqual((await db.query('SELECT * FROM enterprise_payment_orders')).rows[0], before);
+  assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_attempts')).rows[0].count, 2);
+});
+
+test('HTTP: intento no correlacionado con reversion no modifica orden, pago ni snapshots', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  const before = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  const beforePayment = (await db.query('SELECT * FROM pagos')).rows[0];
+  for (const id of ['900', '901']) {
+    providerById.set(id, { ...approved(order), id, preference_id: 'ajena', status: 'charged_back', transaction_amount_refunded: 120.15 });
+    const res = await request(app).post('/webhook').send({ id: `uncorrelated-${id}`, type: 'payment.updated', data: { id } });
+    assert.equal(res.status, 200);
+  }
+  assert.deepEqual((await db.query('SELECT * FROM enterprise_payment_orders')).rows[0], before);
+  assert.deepEqual((await db.query('SELECT * FROM pagos')).rows[0], beforePayment);
+  assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_attempts')).rows[0].count, 1);
+});
+
+for (const [name, patch] of [
+  ['parcial', { transaction_amount_refunded: 1 }],
+  ['total', { status: 'refunded', transaction_amount_refunded: 120.15 }],
+  ['contracargo', { status: 'charged_back' }]
+]) test(`HTTP: reversion ${name} del aceptado no se borra por un approved antiguo`, async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  providerById.set('900', { ...approved(order), ...patch });
+  const reversed = await request(app).post('/webhook').send({ id: `reversal-${name}`, type: 'payment.refunded', data: { id: '900' } });
+  assert.equal(reversed.status, 200, reversed.text);
+  const snapshot = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(snapshot.settled, false);
+  assert.equal(snapshot.accepted_payment_id, '900');
+  assert.ok(snapshot.reversal_snapshot);
+  await webhookAttempt(order, '900', 'approved');
+  const after = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(after.settled, false);
+  assert.deepEqual(after.reversal_snapshot, snapshot.reversal_snapshot);
+  assert.deepEqual(after.provider_snapshot, snapshot.provider_snapshot);
+  assert.equal((await account()).items.flatMap(g => g.movimientos).find(m => m.idConsumo === 1).pagado, false);
+});
+
+test('una reversion de un intento no aceptado no bloquea el aprobado de otro intento', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await syncEnterprisePayment({ ...approved(order), transaction_amount_refunded: 1 });
+  await webhookAttempt(order, '901', 'approved');
+  const after = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(after.settled, true);
+  assert.equal(after.accepted_payment_id, '901');
+  assert.equal(after.reversal_snapshot, null);
+  assert.ok((await db.query("SELECT reversal_snapshot FROM enterprise_payment_attempts WHERE payment_id='900'")).rows[0].reversal_snapshot);
+});
+
+test('dos aprobados generan una incidencia y conservan el primer pago aceptado', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  const snapshot = (await db.query('SELECT provider_snapshot FROM enterprise_payment_orders')).rows[0].provider_snapshot;
+  await webhookAttempt(order, '901', 'approved');
+  await webhookAttempt(order, '901', 'approved');
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.accepted_payment_id, '900');
+  assert.equal(row.settled, true);
+  assert.equal(row.reconciliation_issue, 'multiple_approved_payments');
+  assert.deepEqual(row.provider_snapshot, snapshot);
+  assert.equal((await db.query('SELECT mp_payment_id FROM pagos')).rows[0].mp_payment_id, '900');
+  assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_attempts WHERE eligible_snapshot IS NOT NULL')).rows[0].count, 2);
+  await assert.rejects(createEnterprisePreference(admin, { consumosIds: [1] }), { statusCode: 409 });
+  assert.equal(calls.length, 1);
+});
+
+test('consulta HTTP por ID reconoce otro intento autorizado y no exige el ID del rechazado', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'rejected');
+  providerById.set('901', { ...approved(order), id: '901' });
+  const result = await request(app).get('/901').query({ external_reference: order.orderId, preference_id: order.preferenceId });
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.body.payment.id, '901');
+  assert.equal((await db.query('SELECT accepted_payment_id FROM enterprise_payment_orders')).rows[0].accepted_payment_id, '901');
+  const historicalAttempt = await request(app).get('/900');
+  assert.equal(historicalAttempt.status, 200, historicalAttempt.text);
+  assert.equal(historicalAttempt.body.payment.status, 'rejected');
+  assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled, true);
+});
+
+test('consulta por referencia resuelve todos los intentos incluso con un pago local registrado', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'rejected');
+  // Reproduce una vinculacion local anterior a la migracion, que no es definitiva.
+  await db.query("UPDATE pagos SET mp_payment_id='900',mp_payment_status='rejected'");
+  await db.query("UPDATE enterprise_payment_orders SET payment_id='900'");
+  providerById.set('901', { ...approved(order), id: '901' });
+  searchResults = [{ id: '900' }, { id: '901' }];
+  for (let i = 0; i < 2; i++) {
+    const result = await request(app).get('/').query({ external_reference: order.orderId });
+    assert.equal(result.status, 200, result.text);
+    assert.equal(result.body.results[0].id, '901');
+  }
+  assert.equal((await db.query('SELECT count(*) FROM pagos')).rows[0].count, 1);
+  assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_consumptions')).rows[0].count, 1);
+  assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled, true);
+});
+
+test('consultas de intentos conservan el aislamiento por empresa, sede, rol e identidad del proveedor', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'rejected');
+  providerCalls = [];
+  for (const user of [
+    { id: 9, id_rol: 1, id_empresa: 20 }, { ...admin, id_sede: 102 },
+    { id: 2, id_rol: 2, id_empresa: 10 }, { id: 3, id_rol: 3 }, { id: 5, id_rol: 5 }
+  ]) {
+    for (const path of ['/900', '/901']) {
+      const result = await request(app).get(path).set('actor', JSON.stringify(user)).query({ external_reference: order.orderId });
+      assert.ok([403, 404].includes(result.status), result.text);
+    }
+    const listed = await request(app).get('/').set('actor', JSON.stringify(user)).query({ external_reference: order.orderId });
+    assert.ok(listed.status === 403 || listed.body.results.length === 0);
+  }
+  assert.equal(providerCalls.length, 0);
+  providerById.set('901', { ...approved(order), id: '999' });
+  const mismatch = await request(app).get('/901').query({ external_reference: order.orderId });
+  assert.equal(mismatch.status, 404);
+  const webhook = await request(app).post('/webhook').send({ id: 'wrong-identity', type: 'payment.updated', data: { id: '901' } });
+  assert.equal(webhook.status, 409);
+  assert.equal((await db.query('SELECT accepted_payment_id FROM enterprise_payment_orders')).rows[0].accepted_payment_id, null);
+});
+
+test('webhooks concurrentes de intentos distintos mantienen una sola liquidacion', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  providerById.set('900', { ...approved(order), status: 'rejected' });
+  providerById.set('901', { ...approved(order), id: '901' });
+  const responses = await Promise.all(['900', '901', '901'].map(id => request(app).post('/webhook')
+    .send({ id: `concurrent-${id}`, type: 'payment.updated', data: { id } })));
+  responses.forEach(res => assert.equal(res.status, 200, res.text));
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.accepted_payment_id, '901');
+  assert.equal(row.settled, true);
+  assert.equal((await db.query('SELECT count(*) FROM pagos')).rows[0].count, 1);
+  assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_attempts')).rows[0].count, 2);
+});
+
+test('reembolso manual HTTP opera exclusivamente sobre el pago aceptado y conserva SEG-01', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'rejected');
+  await webhookAttempt(order, '901', 'approved');
+  allowRefunds = true;
+  const superadmin = { id: 4, id_rol: 4 };
+  const rejected = await request(app).post('/900/refund').set('actor', JSON.stringify(superadmin)).send({ amount: 1 });
+  assert.equal(rejected.status, 404, rejected.text);
+  const refund = await request(app).post('/901/refund').set('actor', JSON.stringify(superadmin)).send({ amount: 1 });
+  assert.equal(refund.status, 201, refund.text);
+  const repeated = await request(app).post('/901/refund').set('actor', JSON.stringify(superadmin)).send({ amount: 1 });
+  assert.equal(repeated.status, 200, repeated.text);
+  assert.equal(repeated.body.idempotent, true);
+  const movement = (await account()).items.flatMap(g => g.movimientos).find(m => m.idConsumo === 1);
+  assert.equal(movement.pagado, false);
+  await getAuthorizedPayment(admin, '901');
+  await webhookAttempt(order, '901', 'approved');
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.accepted_payment_id, '901');
+  assert.equal(row.settled, false);
+  assert.equal((await db.query('SELECT count(*) FROM reembolsos')).rows[0].count, 1);
+});
+
+for (const [name, patch] of [
+  ['parcial', { transaction_amount_refunded: 1 }],
+  ['total', { status: 'refunded', transaction_amount_refunded: 120.15 }],
+  ['contracargo', { status: 'charged_back' }]
+]) test(`reversion ${name} de otro intento no modifica el pago aceptado`, async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  const before = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  providerById.set('901', { ...approved(order), id: '901', ...patch });
+  const result = await request(app).post('/webhook').send({ id: `other-reversal-${name}`, type: 'payment.refunded', data: { id: '901' } });
+  assert.equal(result.status, 200, result.text);
+  assert.deepEqual((await db.query('SELECT * FROM enterprise_payment_orders')).rows[0], before);
+  assert.equal((await db.query('SELECT mp_payment_status FROM pagos')).rows[0].mp_payment_status, 'approved');
+});
+
+test('dos aprobados concurrentes no sobrescriben el aceptado y dejan incidencia', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  for (const id of ['900', '901']) providerById.set(id, { ...approved(order), id });
+  const responses = await Promise.all(['900', '901'].map(id => request(app).post('/webhook')
+    .send({ id: `both-approved-${id}`, type: 'payment.updated', data: { id } })));
+  responses.forEach(result => assert.equal(result.status, 200, result.text));
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.settled, true);
+  assert.equal(row.reconciliation_issue, 'multiple_approved_payments');
+  assert.ok(['900', '901'].includes(row.accepted_payment_id));
+  assert.equal(row.provider_snapshot.id, row.accepted_payment_id);
+  assert.equal((await db.query('SELECT mp_payment_id FROM pagos')).rows[0].mp_payment_id, row.accepted_payment_id);
+  assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_consumptions')).rows[0].count, 1);
+});
+
+test('consulta por referencia vuelve a verificar el aceptado aunque search solo devuelva otro intento', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await webhookAttempt(order, '900', 'approved');
+  providerById.set('900', { ...approved(order), transaction_amount_refunded: 1 });
+  providerById.set('901', { ...approved(order), id: '901', status: 'rejected' });
+  searchResults = [{ id: '901' }];
+  const result = await request(app).get('/').query({ external_reference: order.orderId });
+  assert.equal(result.status, 200, result.text);
+  const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(row.accepted_payment_id, '900');
+  assert.equal(row.settled, false);
+  assert.equal(row.reversal_snapshot.transaction_amount_refunded, 1);
+  assert.equal((await db.query('SELECT count(*) FROM pagos')).rows[0].count, 1);
+});
+
+test('consulta por referencia pagina intentos y verifica el detalle del aprobado', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  providerById.set('900', { ...approved(order), status: 'rejected' });
+  providerById.set('901', { ...approved(order), id: '901' });
+  searchResults = [{ id: '900' }, { id: '901' }];
+  searchPageSize = 1;
+  const result = await request(app).get('/').query({ external_reference: order.orderId });
+  assert.equal(result.status, 200, result.text);
+  assert.equal(result.body.results[0].id, '901');
+  assert.ok(searchCalls.some(call => call.offset === 1));
+  assert.deepEqual(providerCalls, ['900', '901']);
+  assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled, true);
 });

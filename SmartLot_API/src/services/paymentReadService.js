@@ -1,4 +1,4 @@
-import { syncEnterprisePayment } from './enterprisePaymentService.js';
+import { getEnterpriseOrderForLocal, syncEnterprisePayment } from './enterprisePaymentService.js';
 import pool from '../database/db.js';
 import { getPayment, searchPayments } from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
@@ -309,7 +309,11 @@ async function authorizedPaymentByProviderId(user, paymentId) {
      ${AUTHORIZED_PAYMENTS_CTE}
      SELECT ${paymentColumns('ap')}
        FROM authorized_payments ap
-      WHERE ap.mp_payment_id = $5
+      WHERE (ap.mp_payment_id = $5 OR EXISTS (
+        SELECT 1 FROM enterprise_payment_attempts ea
+        JOIN enterprise_payment_orders eo ON eo.reference=ea.reference
+        WHERE ea.reference=ap.id_orden_externa AND eo.preference_id=ap.mp_preference_id AND ea.payment_id=$5
+      ))
       LIMIT 1`,
     params
   );
@@ -372,13 +376,38 @@ async function synchronizeByReference(user, filters) {
   }
 
   const local = candidates[0];
-  if (local.mp_payment_id) return;
+  const enterpriseOrder = await getEnterpriseOrderForLocal(local);
+  if (local.mp_payment_id && !enterpriseOrder) return;
   if (!local.mp_preference_id) {
     throw httpError('La preferencia local no permite verificar el pago.', 409, 'incomplete_payment_reference');
   }
 
   const providerResult = await searchPayments({ external_reference: filters.externalReference });
   const providerPayments = providerResult?.results || providerResult?.data || [];
+  if (enterpriseOrder) {
+    // Search puede omitir evidencia de reembolsos: verificar cada ID con Payment.
+    // No elegir el primer resultado ni tratar intentos distintos como filas locales.
+    const ids = new Set(Array.isArray(providerPayments) ? providerPayments.map(p => String(p.id)) : []);
+    let offset = Array.isArray(providerPayments) ? providerPayments.length : 0;
+    const total = Number(providerResult?.paging?.total || offset);
+    while (offset < total) {
+      const page = await searchPayments({ external_reference: filters.externalReference, limit: 100, offset });
+      if (!Array.isArray(page?.results) || !page.results.length) {
+        throw httpError('El proveedor no devolvio todos los intentos de la referencia.', 409, 'incomplete_provider_attempts');
+      }
+      page.results.forEach(payment => ids.add(String(payment.id)));
+      offset += page.results.length;
+    }
+    if (enterpriseOrder.accepted_payment_id) ids.add(enterpriseOrder.accepted_payment_id);
+    for (const id of ids) {
+      if (!/^\d+$/.test(id)) continue;
+      const payment = await getPayment(id);
+      if (await providerPaymentMatchesLocal(payment, {
+        id_orden_externa: local.id_orden_externa, mp_preference_id: local.mp_preference_id
+      }, id)) await syncEnterprisePayment(payment);
+    }
+    return;
+  }
   const matches = [];
   if (Array.isArray(providerPayments)) {
     for (const payment of providerPayments) {
@@ -445,15 +474,19 @@ export async function getAuthorizedPayment(user, rawPaymentId, rawQuery = {}) {
     });
     if (!filters.externalReference) throw httpError('Pago no encontrado.', 404, 'payment_not_found');
     const candidates = await authorizedReferenceCandidates(user, filters.externalReference, filters.preferenceId);
-    if (candidates.length !== 1 || candidates[0].mp_payment_id) {
+    if (candidates.length !== 1 || (candidates[0].mp_payment_id && !await getEnterpriseOrderForLocal(candidates[0]))) {
       throw httpError('Pago no encontrado.', 404, 'payment_not_found');
     }
     local = candidates[0];
     pendingLookup = true;
   }
 
+  const enterpriseOrder = await getEnterpriseOrderForLocal(local);
+  const correlation = enterpriseOrder
+    ? { id_orden_externa: local.id_orden_externa, mp_preference_id: local.mp_preference_id }
+    : local;
   const payment = await getPayment(paymentId);
-  if (!await providerPaymentMatchesLocal(payment, local, paymentId)) {
+  if (!await providerPaymentMatchesLocal(payment, correlation, paymentId)) {
     throw httpError(
       pendingLookup ? 'Pago no encontrado.' : 'El proveedor devolvio referencias contradictorias para el pago local.',
       pendingLookup ? 404 : 409,

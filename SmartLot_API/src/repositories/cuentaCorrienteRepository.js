@@ -63,14 +63,14 @@ export default class CuentaCorrienteRepository {
                     c.responsable_pago::text AS responsable_pago,
                     EXISTS (SELECT 1 FROM enterprise_payment_consumptions ec
                       JOIN enterprise_payment_orders eo USING(reference)
-                      JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id
+                      JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id AND p.mp_payment_id=eo.accepted_payment_id
                       WHERE ec.consumption_id=c.id AND eo.id_empresa=c.id_empresa
                         AND (eo.id_sede IS NULL OR eo.id_sede=c.id_sede) AND ec.expected_amount=c.importe_generado
                         AND eo.settled AND p.mp_payment_status='approved') AS pagado,
                     EXISTS (SELECT 1 FROM enterprise_payment_consumptions ec
                       JOIN enterprise_payment_orders eo USING(reference)
-                      LEFT JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id
-                      WHERE ec.consumption_id=c.id AND (NOT eo.settled OR p.mp_payment_status IS DISTINCT FROM 'approved')) AS requiere_regularizacion
+                      LEFT JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id AND p.mp_payment_id=eo.accepted_payment_id
+                      WHERE ec.consumption_id=c.id AND (NOT eo.settled OR p.mp_payment_status IS DISTINCT FROM 'approved' OR eo.reconciliation_issue IS NOT NULL)) AS requiere_regularizacion
                FROM consumos_reserva c
                JOIN garages g ON g.id = c.id_garage
                JOIN sedes s ON s.id = c.id_sede

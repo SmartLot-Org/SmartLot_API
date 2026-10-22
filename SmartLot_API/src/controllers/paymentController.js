@@ -356,6 +356,7 @@ router.post('/webhook', async (req, res, next) => {
 
     if (tipoEvento === 'payment.created' || tipoEvento === 'payment.updated') {
       const payment = await getPayment(data.id);
+      if (!payment || String(payment.id) !== String(data.id)) throwError('Identidad de pago contradictoria en el proveedor.', 409);
       if (await syncEnterprisePayment(payment)) {
         // Orden empresarial verificada por asociaciones locales.
       } else if (payment?.metadata?.id_reserva) {
@@ -368,6 +369,7 @@ router.post('/webhook', async (req, res, next) => {
       }
     } else if (tipoEvento === 'payment.refunded') {
       const payment = await getPayment(data.id);
+      if (!payment || String(payment.id) !== String(data.id)) throwError('Identidad de pago contradictoria en el proveedor.', 409);
       if (!await syncEnterprisePayment(payment)) {
         await updatePaymentStatus(data.id, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
       }

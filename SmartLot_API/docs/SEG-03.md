@@ -79,7 +79,7 @@ El rol PostgreSQL del backend debe poder operar las tablas con RLS (como la cone
 
 En esta tarea la migración se ejecutó solamente en PGlite en memoria. No se hicieron cobros, reembolsos ni escrituras en producción.
 
-## Validación
+## Validación inicial (antes de corregir intentos múltiples)
 
 Se ejecutaron las cinco suites solicitadas y `enterprise-payment-sql.integration.test.js`: **101 pruebas, 101 aprobadas, 0 fallidas, 0 omitidas** (71 regresiones y 30 nuevas). Las cuatro pruebas del contrato vulnerable de creación libre se reemplazaron por rechazo del endpoint anterior y pruebas SQL del contrato seguro; se conservaron permisos, correlación y regresiones de reembolso.
 
@@ -115,3 +115,78 @@ Frontend:
 No hay cancelación automática, vencimiento de claims ni reintento de creación de preferencia después de fallo/timeout. Se prioriza impedir dobles obligaciones: esas órdenes requieren conciliación administrativa antes de otra operación. Tampoco se reparan automáticamente históricos, reembolsos parciales o contracargos; no hay una herramienta nueva de regularización en este alcance. La vista de diagnóstico permanece restringida al backend/operador de base.
 
 No se probó Mercado Pago real ni un PostgreSQL de múltiples conexiones. El estado local se actualiza al recibir webhooks o consultas autorizadas al proveedor, no mediante un polling nuevo en servidor. La migración y el despliegue siguen pendientes fuera del entorno aislado.
+
+## Corrección de intentos múltiples de un checkout
+
+Los commits revisados de backend `9f7d16b` y frontend `7cff65c` mantenían dos defectos: el primer intento correlacionado fijaba `payment_id`, aunque estuviera rechazado, y los intentos siguientes podían modificar `settled` y los snapshots sin correlacionar con el pago aceptado. Además, las consultas por referencia dejaban de buscar al existir un ID local y la consulta de otro ID confundía la identidad de la orden con la del intento.
+
+Se agregaron primero dos pruebas de regresión con la ruta HTTP del webhook y PGlite. Ambas fallaron con la implementación anterior:
+
+| Secuencia | Antes | Después |
+| --- | --- | --- |
+| Rechazado `900` → aprobado `901`, ARS 120,15 | ID fijado en `900`; consumo pendiente | `accepted_payment_id=901`, `payment_id=901`, `settled=true`; consumo pagado |
+| Aprobado `900` → rechazado `901` | `settled=false` pese a pago local aprobado | Aceptado `900`, liquidación y snapshots conservados |
+
+### Persistencia y reconocimiento
+
+La migración incremental `migrations/20261022130158_seg03_enterprise_payment_attempts.sql` agrega:
+
+- `enterprise_payment_attempts`: identidad única, orden, último snapshot correlacionado, primera aprobación económicamente válida, primera reversión verificada y archivo de evidencia anterior.
+- `enterprise_payment_orders.accepted_payment_id`: identidad definitiva e inmutable, asignada únicamente al aceptar un aprobado con referencia, preferencia/merchant order, identidad, importe, moneda y ausencia verificable de reembolsos correctos.
+- `enterprise_payment_orders.reconciliation_issue`: incidencia explícita si se observa otro pago aprobado distinto, sin reemplazar el aceptado ni sumar cobertura.
+
+`payment_id` mantiene compatibilidad con el esquema previo. En órdenes nuevas solo se asigna junto con `accepted_payment_id`; en registros anteriores puede contener un intento inicial no aceptado hasta la siguiente verificación válida. La migración permite reemplazar ese pin sin debilitar la inmutabilidad del pago que ya fue aceptado. No modifica importes, consumos ni preferencias, ni crea nuevas liquidaciones durante el backfill. Conserva pagos válidos y la evidencia económica anterior; los snapshots contradictorios se archivan en `legacy_evidence`. Una reversión de otra identidad o sin correlación demostrable deja de utilizarse como reversión del pago aceptado, conservando el original archivado.
+
+Los candidatos se correlacionan específicamente con el checkout. No se modificó `providerPaymentMatchesLocal` ni se eliminaron sus controles de ID para consultas ordinarias y reembolsos. Los webhooks comprueban también que el ID consultado sea el devuelto por el proveedor.
+
+La orden se bloquea en transacción. Los intentos correlacionados se guardan por ID con protección frente a referencias contradictorias. Un pendiente/rechazado no fija una asociación definitiva. Después de aceptar un pago, otro intento no reemplaza su estado, motivos ni snapshots financieros. Las reversiones se conservan por intento y solo reabren la cobertura cuando corresponden al aceptado. Antes de actualizarlo se bloquea y relee la fila local, incluyendo reembolsos manuales de SEG-01. Una respuesta antigua no elimina una reversión confirmada ni restaura la liquidación.
+
+Dos aprobados distintos dejan `reconciliation_issue='multiple_approved_payments'` y evidencia por ID. Se conserva el pago aceptado y su cobertura, pero la cuenta señala regularización. No se emite otra preferencia, no se suman consumos pagados dos veces y no se realiza un reembolso automático del segundo cargo.
+
+Consulta operativa de incidencias (restringida al operador de base):
+
+```sql
+SELECT reference, accepted_payment_id, reconciliation_issue, settled
+FROM enterprise_payment_orders WHERE reconciliation_issue IS NOT NULL;
+SELECT payment_id, reference, eligible_snapshot, reversal_snapshot, legacy_evidence
+FROM enterprise_payment_attempts WHERE reference = 'referencia-a-conciliar';
+```
+
+### Consultas y reembolsos
+
+La autorización SQL de SEG-02 se conserva y precede cualquier consulta al proveedor. El detalle por ID puede resolver un intento persistido de una orden autorizada o un candidato con contexto local autorizado. Solo en ese contexto empresarial se correlaciona el candidato con el checkout, sin exigir que sea el pago previamente aceptado.
+
+La búsqueda por referencia ya no termina por tener `mp_payment_id`: consulta los distintos intentos, sigue la paginación informada y obtiene cada Payment individual para comprobar identidad y reembolsos. También vuelve a verificar el aceptado aunque no aparezca en los resultados de search. Dos aprobados no se tratan como una referencia local ambigua: quedan registrados como incidencia de esa orden.
+
+La cuenta corriente requiere el ID aceptado junto con la preferencia y la cobertura verificada. `pagos` sigue teniendo una sola fila local por orden y conserva como `mp_payment_id` el aceptado. Así, el reembolso manual mantiene su correlación estricta y opera sobre ese pago. El contrato HTTP del frontend no cambia y no se modificaron archivos de frontend.
+
+### Validación actual
+
+Se ejecutaron las siete suites solicitadas y la nueva `test/enterprise-payment-attempts-migration.integration.test.js`: **131 pruebas aprobadas, 0 fallidas, 0 omitidas**. Se conservan las verificaciones de permisos de SEG-01/SEG-02. Las pruebas cubren además pendientes/rechazados antes o después del aprobado, mismo/distinto ID, evidencia no correlacionada, reversiones propias y ajenas, respuestas antiguas, doble aprobación, concurrencia, detalle y búsqueda HTTP, paginación, reembolso manual e idempotencia. La migración se ejecuta sobre datos anteriores reales en otra instancia PGlite y comprueba archivo, importes, asociaciones válidas y triggers.
+
+Dos expectativas anteriores se adaptaron al comportamiento requerido: una reversión de orden debe ser del pago previamente aceptado; una merchant order no correlacionada no puede modificar una liquidación ya aceptada. Se mantienen pruebas para impedir que esas respuestas salden una orden nueva. La suite unitaria de cuentas corrientes ahora aísla su importación de DB para evitar conexiones externas; las consultas económicas y autorizaciones SQL se siguen ejecutando en PGlite en las suites de integración.
+
+`npm run check:syntax`, `npm run check:routes` y `git diff --check`: aprobados. No se ejecutaron comprobaciones de frontend porque no hay cambios en ese repositorio. Mercado Pago está simulado; ninguna prueba efectúa cobros, reembolsos reales ni escrituras de producción.
+
+### Archivos de esta corrección y despliegue
+
+- `src/services/enterprisePaymentService.js`
+- `src/services/paymentReadService.js`
+- `src/controllers/paymentController.js`
+- `src/repositories/cuentaCorrienteRepository.js`
+- `migrations/20261022130158_seg03_enterprise_payment_attempts.sql` (nueva; no reemplaza la migración anterior)
+- `test/enterprise-payment-sql.integration.test.js`
+- `test/enterprise-payment-attempts-migration.integration.test.js` (nueva)
+- `test/payment-read-sql.integration.test.js`
+- `test/cuentas-corrientes.test.js`
+- `docs/SEG-03.md`
+
+Aplicar primero la migración original de órdenes si todavía no está instalada. Después, con los escritores de pagos detenidos, respaldo y base de staging seleccionada explícitamente:
+
+```sh
+psql "$STAGING_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/20261022130158_seg03_enterprise_payment_attempts.sql
+```
+
+Desplegar este backend antes de reanudar el procesamiento. No mezclar instancias con el sincronizador anterior: no entiende el pago aceptado ni la tabla de intentos. No requiere cambios ni despliegue de frontend. Las órdenes anteriores no liquidadas se recuperan mediante verificación autorizada por ID/referencia o un webhook; el backfill no declara pagado nada nuevo.
+
+Persisten los límites anteriores de conciliación administrativa para históricos ambiguos, timeouts, reversiones y cargos duplicados. No hay distribución automática de devoluciones parciales ni compensación del segundo cargo. PGlite serializa transacciones en una conexión; no se ha realizado una prueba multiproceso con PostgreSQL ni se ha aplicado esta migración fuera del entorno aislado. SEG-04 queda fuera de alcance.
