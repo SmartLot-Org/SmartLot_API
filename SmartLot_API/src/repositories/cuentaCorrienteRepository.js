@@ -60,7 +60,17 @@ export default class CuentaCorrienteRepository {
                     to_char(c.fecha_inicio, 'YYYY-MM') AS periodo,
                     c.fecha_inicio, c.fecha_fin, c.tipo_vehiculo::text AS tipo_vehiculo,
                     c.minutos_facturados, c.tarifa_hora_aplicada, c.importe_generado,
-                    c.responsable_pago::text AS responsable_pago
+                    c.responsable_pago::text AS responsable_pago,
+                    EXISTS (SELECT 1 FROM enterprise_payment_consumptions ec
+                      JOIN enterprise_payment_orders eo USING(reference)
+                      JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id
+                      WHERE ec.consumption_id=c.id AND eo.id_empresa=c.id_empresa
+                        AND (eo.id_sede IS NULL OR eo.id_sede=c.id_sede) AND ec.expected_amount=c.importe_generado
+                        AND eo.settled AND p.mp_payment_status='approved') AS pagado,
+                    EXISTS (SELECT 1 FROM enterprise_payment_consumptions ec
+                      JOIN enterprise_payment_orders eo USING(reference)
+                      LEFT JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id
+                      WHERE ec.consumption_id=c.id AND (NOT eo.settled OR p.mp_payment_status IS DISTINCT FROM 'approved')) AS requiere_regularizacion
                FROM consumos_reserva c
                JOIN garages g ON g.id = c.id_garage
                JOIN sedes s ON s.id = c.id_sede
@@ -75,25 +85,6 @@ export default class CuentaCorrienteRepository {
             [idEmpresa, idSede, periodo, search]
         );
         return result.rows;
-    };
-
-    getPagosAprobadosPorEmpresaAsync = async (idEmpresa) => {
-        // Trae pagos approved para marcar consumos como PAGADA
-        // Incluye id_reserva directo y metadata.consumos_ids para pagos de grupo
-        try {
-            const result = await pool.query(
-                `SELECT id, id_reserva, id_orden_externa, mp_payment_id, mp_payment_status, monto, metadata
-                   FROM pagos
-                  WHERE id_empresa = $1
-                    AND mp_payment_status = 'approved'`,
-                [idEmpresa]
-            );
-            return result.rows;
-        } catch (e) {
-            // Si tabla pagos no existe aún, retornar vacío sin romper cuentas corrientes
-            if (e.code === '42P01') return [];
-            throw e;
-        }
     };
 
     getDuenoAsync = async ({ idUsuario, idGarage = null, periodo = null, search = null }) => {

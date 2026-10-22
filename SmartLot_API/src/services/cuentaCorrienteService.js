@@ -7,6 +7,10 @@ const fail = (message, statusCode) => {
 };
 
 const money = (value) => Number(Number(value).toFixed(2));
+const addMoney = (left, right) => {
+    const toCents = (value) => BigInt(Number(value).toFixed(2).replace('.', ''));
+    return Number(toCents(left) + toCents(right)) / 100;
+};
 
 export default class CuentaCorrienteService {
     constructor() {
@@ -39,53 +43,6 @@ export default class CuentaCorrienteService {
 
         const rows = await this.repo.getAdminAsync({ idEmpresa, idSede, periodo, search });
 
-        // Obtener pagos aprobados para determinar estado PAGADA/PENDIENTE
-        // Se vincula por id_reserva directo y por metadata.consumos_ids (pagos de grupo) y por id_orden_externa pattern ADMIN-PAGO-periodo-G*-S*
-        let pagosAprobados = [];
-        try {
-            pagosAprobados = await this.repo.getPagosAprobadosPorEmpresaAsync(idEmpresa);
-        } catch {}
-
-        const reservaPagadaSet = new Set();
-        const consumoPagadoSet = new Set();
-        const grupoPagadoSet = new Set(); // key = periodo:Gx:Sx
-
-        for (const p of pagosAprobados) {
-            if (p.id_reserva) reservaPagadaSet.add(Number(p.id_reserva));
-            // metadata puede venir como string o objeto según driver
-            let meta = p.metadata;
-            if (typeof meta === 'string') {
-                try { meta = JSON.parse(meta); } catch { meta = {}; }
-            }
-            if (meta && Array.isArray(meta.consumos_ids)) {
-                for (const cid of meta.consumos_ids) consumoPagadoSet.add(Number(cid));
-            }
-            // También considerar pagos que fueron stringificados completos desde MP (metadata contiene paymentData)
-            // Por compatibilidad, si el metadata interno tiene consumos_ids anidado
-            if (meta && meta.consumos_ids) {
-                const arr = Array.isArray(meta.consumos_ids) ? meta.consumos_ids : [];
-                for (const cid of arr) consumoPagadoSet.add(Number(cid));
-            }
-            // Detectar pagos de grupo por id_orden_externa: ADMIN-PAGO-YYYY-MM-Gx-Sx-*
-            if (p.id_orden_externa && p.id_orden_externa.startsWith('ADMIN-PAGO-')) {
-                // formato: ADMIN-PAGO-2025-08-G3-S2-...  -> extraer periodo y G/S
-                const m = String(p.id_orden_externa).match(/ADMIN-PAGO-(\d{4}-\d{2})-G(\d+)-S(\d+)/);
-                if (m) {
-                    const [, per, g, s] = m;
-                    grupoPagadoSet.add(`${g}:${s}:${per}`);
-                }
-                // También soportar formato legacy: ADMIN-PAGO-YYYY-MM-Gx-Sy-TEST-xxxx
-            }
-        }
-
-        const isConsumoPagado = (row) => {
-            if (reservaPagadaSet.has(Number(row.id_reserva))) return true;
-            if (consumoPagadoSet.has(Number(row.id))) return true;
-            const gkey = `${row.id_garage}:${row.id_sede}:${row.periodo}`;
-            if (grupoPagadoSet.has(gkey)) return true;
-            return false;
-        };
-
         const groups = new Map();
         for (const row of rows) {
             const key = `${row.id_garage}:${row.id_sede}:${row.periodo}`;
@@ -99,6 +56,8 @@ export default class CuentaCorrienteService {
                     reservasUtilizadas: 0,
                     minutosTotales: 0,
                     importeGenerado: 0,
+                    importePendiente: 0,
+                    requiereRegularizacion: false,
                     movimientos: [],
                     _pagados: 0,
                 });
@@ -107,8 +66,10 @@ export default class CuentaCorrienteService {
             const importe = money(row.importe_generado);
             group.reservasUtilizadas += 1;
             group.minutosTotales += Number(row.minutos_facturados);
-            group.importeGenerado = money(group.importeGenerado + importe);
-            const pagado = isConsumoPagado(row);
+            group.importeGenerado = addMoney(group.importeGenerado, importe);
+            const pagado = row.pagado === true;
+            group.requiereRegularizacion ||= row.requiere_regularizacion === true;
+            if (!pagado) group.importePendiente = addMoney(group.importePendiente, importe);
             if (pagado) group._pagados += 1;
             group.movimientos.push({
                 idConsumo: Number(row.id),
@@ -122,6 +83,7 @@ export default class CuentaCorrienteService {
                 tarifaHoraAplicada: money(row.tarifa_hora_aplicada),
                 importeGenerado: importe,
                 pagado,
+                requiereRegularizacion: row.requiere_regularizacion === true,
             });
         }
 
@@ -133,7 +95,7 @@ export default class CuentaCorrienteService {
         const summary = items.reduce((acc, item) => ({
             reservasUtilizadas: acc.reservasUtilizadas + item.reservasUtilizadas,
             minutosTotales: acc.minutosTotales + item.minutosTotales,
-            importeGenerado: money(acc.importeGenerado + item.importeGenerado),
+            importeGenerado: addMoney(acc.importeGenerado, item.importeGenerado),
         }), { reservasUtilizadas: 0, minutosTotales: 0, importeGenerado: 0 });
         return { items, summary };
     };
@@ -164,7 +126,7 @@ export default class CuentaCorrienteService {
             const importe = money(row.importe_generado);
             group.reservasUtilizadas += 1;
             group.minutosTotales += Number(row.minutos_facturados);
-            group.importeGenerado = money(group.importeGenerado + importe);
+            group.importeGenerado = addMoney(group.importeGenerado, importe);
             if (row.responsable_pago === 'empresa') group.importeEmpresas = money(group.importeEmpresas + importe);
             else group.importeEmpleados = money(group.importeEmpleados + importe);
             group.movimientos.push({ idConsumo: Number(row.id), idReserva: row.id_reserva, fechaInicio: row.fecha_inicio,
@@ -174,7 +136,7 @@ export default class CuentaCorrienteService {
         }
         const items = [...groups.values()];
         const summary = items.reduce((acc, item) => ({ reservasUtilizadas: acc.reservasUtilizadas + item.reservasUtilizadas,
-            minutosTotales: acc.minutosTotales + item.minutosTotales, importeGenerado: money(acc.importeGenerado + item.importeGenerado),
+            minutosTotales: acc.minutosTotales + item.minutosTotales, importeGenerado: addMoney(acc.importeGenerado, item.importeGenerado),
             importeEmpresas: money(acc.importeEmpresas + item.importeEmpresas), importeEmpleados: money(acc.importeEmpleados + item.importeEmpleados) }),
         { reservasUtilizadas: 0, minutosTotales: 0, importeGenerado: 0, importeEmpresas: 0, importeEmpleados: 0 });
         return { items, summary };

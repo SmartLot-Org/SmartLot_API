@@ -52,6 +52,7 @@ mock.module('../src/database/db.js', {
   defaultExport: {
     query: async (sql, params = []) => {
       state.queries.push({ sql, params });
+      if (sql.includes("enterprise_payment_orders")) return { rows: [] };
       return { rows: [state.pgRow] };
     }
   }
@@ -75,47 +76,10 @@ function findQuery(sqlPart) {
   return state.queries.find((q) => q.sql.includes(sqlPart));
 }
 
-test('POST /preference sin items -> 400', async () => {
-  const res = await request(app).post('/preference').send({ orderId: 'ORD-1' });
-  assert.equal(res.status, 400);
+test('POST /preference anterior sin autenticacion no acepta items arbitrarios', async () => {
+  const res = await request(app).post('/preference').send({ items: [{unit_price: 0.10}], orderId: 'ADMIN-PAGO-test' });
+  assert.equal(res.status, 401);
   assert.equal(state.serviceCalls.length, 0);
-});
-
-test('POST /preference sin orderId -> 400', async () => {
-  const res = await request(app).post('/preference').send({ items: [{ title: 'x', unit_price: 1 }] });
-  assert.equal(res.status, 400);
-});
-
-test('POST /preference crea preferencia y guarda en pagos', async () => {
-  const res = await request(app)
-    .post('/preference')
-    .send({ items: [{ id: 1, title: 'Reserva', unit_price: 750, quantity: 2 }], orderId: 'ORD-42' });
-
-  assert.equal(res.status, 201);
-  assert.deepEqual(res.body, {
-    preferenceId: 'pref-123',
-    initPoint: 'https://init.example/pref-123',
-    sandboxInitPoint: 'https://sandbox.example/pref-123',
-    sandbox: false
-  });
-  assert.deepEqual(state.serviceCalls[0], ['createPreference', [{ id: 1, title: 'Reserva', unit_price: 750, quantity: 2 }], 'ORD-42']);
-  const insert = findQuery('INSERT INTO pagos');
-  assert.ok(insert);
-  assert.equal(insert.params[0], 'ORD-42');
-  assert.equal(insert.params[2], 1500);
-});
-
-test('POST /preference con MP_SANDBOX=true devuelve sandbox_init_point como initPoint', async () => {
-  process.env.MP_SANDBOX = 'true';
-  const res = await request(app)
-    .post('/preference')
-    .send({ items: [{ title: 'Reserva', unit_price: 100, quantity: 1 }], orderId: 'ORD-43' });
-
-  assert.equal(res.status, 201);
-  assert.equal(res.body.sandbox, true);
-  assert.equal(res.body.initPoint, 'https://sandbox.example/pref-123');
-  assert.equal(res.body.sandboxInitPoint, 'https://sandbox.example/pref-123');
-  delete process.env.MP_SANDBOX;
 });
 
 test('POST /webhook con firma valida responde 200 y registra evento', async () => {

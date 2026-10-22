@@ -1,3 +1,4 @@
+import { createEnterprisePreference, syncEnterprisePayment } from '../services/enterprisePaymentService.js';
 import { Router } from 'express';
 import {
   createPreference,
@@ -25,6 +26,7 @@ function throwError(message, statusCode) {
 }
 
 async function savePaymentRecord(paymentData, idEmpresa = null, db = pool) {
+  if (await syncEnterprisePayment(paymentData, db)) return null;
   const {
     id: mpPaymentId,
     preference_id: mpPreferenceId,
@@ -42,7 +44,7 @@ async function savePaymentRecord(paymentData, idEmpresa = null, db = pool) {
   // Esto evita duplicar filas: preferencia (sin payment_id) -> pago (con payment_id) y mantiene vinculación con consumos
   if (mpPreferenceId || orderId) {
     try {
-      const prefRes = await pool.query(
+      const prefRes = await db.query(
         `SELECT id, metadata, mp_payment_id, mp_preference_id, id_orden_externa FROM pagos WHERE (mp_preference_id = $1 OR id_orden_externa = $2) AND mp_payment_id IS NULL LIMIT 1`,
         [mpPreferenceId || null, orderId || null]
       );
@@ -62,7 +64,7 @@ async function savePaymentRecord(paymentData, idEmpresa = null, db = pool) {
         if (existingMeta.consumos_ids && !mergedMeta.consumos_ids) mergedMeta.consumos_ids = existingMeta.consumos_ids;
         if (existingMeta.items && !mergedMeta.items) mergedMeta.items = existingMeta.items;
 
-        const upd = await pool.query(
+        const upd = await db.query(
           `UPDATE pagos SET
              mp_payment_id = $1,
              mp_payment_status = $2,
@@ -216,24 +218,22 @@ async function markWebhookProcessed(mpEventId, error = null) {
   await pool.query(query, [error, mpEventId]);
 }
 
-router.post('/preference', async (req, res, next) => {
+router.post('/preference', requireRole(1, 2, 4), async (req, res, next) => {
   try {
     let {
       items,
       orderId,
       backUrls,
-      metadata,
-      consumosIds,
-      periodo,
-      idGarage,
-      idSede,
       idReserva
     } = req.body;
 
     let reserva = null;
+    if (idReserva == null) {
+      return res.status(201).json(await createEnterprisePreference(req.usuario, req.body));
+    }
+    if (Number(req.usuario?.id_rol) !== 2) throwError('Solo empleados pueden pagar reservas propias.', 403);
 
-    // Compatibilidad con el flujo de pago de reservas de empleados.
-    // El flujo de Admin envía items/orderId y metadata de consumos.
+    // La reserva del empleado tambien usa su importe persistido.
     if (idReserva !== undefined && idReserva !== null) {
       if (!isValidId(String(idReserva))) throwError('idReserva is required', 400);
 
@@ -268,7 +268,6 @@ router.post('/preference', async (req, res, next) => {
         unit_price: Number(reserva.importe_estimado),
         currency_id: 'ARS'
       }];
-      metadata = { ...(metadata || {}), id_reserva: reserva.id };
     }
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -279,22 +278,6 @@ router.post('/preference', async (req, res, next) => {
       throwError('orderId is required', 400);
     }
 
-    // Cap sandbox a $0.10 máximo para permitir múltiples testeos con saldo chico
-    // Aplica a pagos de admin (ADMIN-PAGO) o si MP_SANDBOX=true
-    const esPagoAdmin = String(orderId).startsWith('ADMIN-PAGO-');
-    const sandboxMode = !reserva && (isSandbox() || esPagoAdmin);
-    if (sandboxMode) {
-      const MAX_TEST = 0.10;
-      items = items.map((it) => ({
-        ...it,
-        unit_price: Math.min(Number(it.unit_price ?? it.monto ?? 0), MAX_TEST),
-      }));
-      // Si tras cap el monto es 0, forzar 0.10 para que MP no rechace monto 0
-      for (const it of items) {
-        if (!(Number(it.unit_price) > 0)) it.unit_price = MAX_TEST;
-      }
-    }
-
     const preference = await createPreference(
       items,
       orderId,
@@ -302,17 +285,7 @@ router.post('/preference', async (req, res, next) => {
       reserva ? { id_reserva: reserva.id } : {}
     );
 
-    // Metadata extendida para vincular con consumos_reserva (para marcar PAGADA)
-    const extraMeta = {};
-    if (metadata && typeof metadata === 'object') Object.assign(extraMeta, metadata);
-    if (consumosIds) extraMeta.consumos_ids = consumosIds;
-    else if (metadata?.consumos_ids) extraMeta.consumos_ids = metadata.consumos_ids;
-    if (periodo) extraMeta.periodo = periodo;
-    if (idGarage) extraMeta.id_garage = idGarage;
-    if (idSede) extraMeta.id_sede = idSede;
-    // Si items trae consumos_ids en descripción, propagar
-    const metadataToStore = { items, orderId, ...extraMeta };
-
+    const metadataToStore = { id_reserva: reserva.id };
     await pool.query(
       `INSERT INTO pagos (id_orden_externa, mp_preference_id, monto, moneda, descripcion, id_empresa, metadata, id_reserva)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -320,7 +293,7 @@ router.post('/preference', async (req, res, next) => {
       [
         orderId,
         preference.id,
-        items.reduce((sum, item) => sum + (Number(item.unit_price || item.monto || 0) * Number(item.quantity || 1)), 0),
+        reserva.importe_estimado,
         'ARS',
         `Reserva ${orderId}`,
         req.usuario?.id_empresa || null,
@@ -383,7 +356,9 @@ router.post('/webhook', async (req, res, next) => {
 
     if (tipoEvento === 'payment.created' || tipoEvento === 'payment.updated') {
       const payment = await getPayment(data.id);
-      if (payment?.metadata?.id_reserva) {
+      if (await syncEnterprisePayment(payment)) {
+        // Orden empresarial verificada por asociaciones locales.
+      } else if (payment?.metadata?.id_reserva) {
         await persistPaymentAndConfirmReservation(payment);
       } else {
         // Los pagos de Admin no están vinculados a una reserva pendiente.
@@ -393,7 +368,9 @@ router.post('/webhook', async (req, res, next) => {
       }
     } else if (tipoEvento === 'payment.refunded') {
       const payment = await getPayment(data.id);
-      await updatePaymentStatus(data.id, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
+      if (!await syncEnterprisePayment(payment)) {
+        await updatePaymentStatus(data.id, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
+      }
     }
 
     await markWebhookProcessed(mpEventId);

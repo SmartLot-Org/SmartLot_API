@@ -1,3 +1,4 @@
+import { syncEnterprisePayment } from './enterprisePaymentService.js';
 import pool from '../database/db.js';
 import { getPayment, searchPayments } from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
@@ -316,6 +317,7 @@ async function authorizedPaymentByProviderId(user, paymentId) {
 }
 
 async function updateAuthorizedLocalPayment(local, payment) {
+  if (await syncEnterprisePayment(payment)) return;
   const summary = {
     id: String(payment.id),
     status: payment.status ?? null,

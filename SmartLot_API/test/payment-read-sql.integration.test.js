@@ -72,6 +72,7 @@ async function insertPayment({ number, reservationId = null, reference, preferen
 
 test.before(async () => {
   await db.exec(`
+    CREATE TABLE enterprise_payment_orders(reference text, payment_id text, preference_id text);
     CREATE TABLE usuarios (id integer PRIMARY KEY, id_empresa integer);
     CREATE TABLE sedes (id integer PRIMARY KEY, id_empresa integer);
     CREATE TABLE trato_empresa_garage (id bigint PRIMARY KEY, id_sede integer);
