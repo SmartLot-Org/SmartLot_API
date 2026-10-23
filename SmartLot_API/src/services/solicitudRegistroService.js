@@ -68,7 +68,7 @@ export default class SolicitudRegistroService {
         });
 
         await this._notificarSuperadmins(solicitud);
-        return solicitud;
+        return this._sanitizarSolicitud(solicitud);
     };
 
     // Aviso por email a los superadmins (best-effort): un fallo de correo
