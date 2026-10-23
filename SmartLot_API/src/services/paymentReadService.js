@@ -494,6 +494,17 @@ export async function getAuthorizedPayment(user, rawPaymentId, rawQuery = {}) {
     );
   }
   await updateAuthorizedLocalPayment(local, payment);
+  if (enterpriseOrder) {
+    // Synchronization may have discarded this provider response as stale. Read
+    // the committed financial state, scoped again to the authorized local order.
+    const current = await authorizedPaymentByProviderId(user, paymentId);
+    if (current && String(current.mp_payment_id) === paymentId) {
+      return { payment: toPaymentResponse(current) };
+    }
+    const attempt = (await pool.query(`SELECT provider_snapshot FROM enterprise_payment_attempts
+      WHERE payment_id=$1 AND reference=$2`, [paymentId, local.id_orden_externa])).rows[0];
+    if (attempt?.provider_snapshot) return { payment: toPaymentResponse(attempt.provider_snapshot) };
+  }
   return {
     payment: {
       ...toPaymentResponse(payment),

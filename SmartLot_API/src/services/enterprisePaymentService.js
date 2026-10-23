@@ -3,6 +3,7 @@ import pool from '../database/db.js';
 import * as mp from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
 import { readProviderRefundState } from './paymentRefundState.js';
+import { decideEnterpriseObservation } from './enterprisePaymentObservation.js';
 
 const fail = (message, statusCode = 409) => { throw Object.assign(new Error(message), { statusCode }); };
 export function cents(value) {
@@ -118,6 +119,35 @@ export async function syncEnterprisePayment(payment, db = pool) {
     (refunds.known && refunds.valid && refunds.refundedCents > 0));
   const eligible = economicsMatch && payment.status === 'approved' && refunds.known && refunds.valid &&
     refunds.classification === 'none' && !priorAttempt?.reversal_snapshot;
+  const localPayment = (await db.query(`SELECT mp_payment_status,metadata FROM pagos
+    WHERE id_orden_externa=$1 AND mp_preference_id=$2 AND mp_payment_id=$3 FOR UPDATE`,
+  [order.reference, order.preference_id, order.accepted_payment_id])).rows[0];
+  const locallyReversed = localPayment && (['refunded','partially_refunded','charged_back'].includes(localPayment.mp_payment_status) || localPayment.metadata?.lastRefundId);
+  if (order.accepted_payment_id === paymentId && locallyReversed) await db.query(`UPDATE enterprise_payment_orders
+    SET settled=false,review_reason='reversal_requires_regularization' WHERE reference=$1`, [order.reference]);
+  let previousSnapshot = priorAttempt?.provider_snapshot ||
+    (order.accepted_payment_id === paymentId ? order.provider_snapshot : null);
+  // An economically invalid, unaccepted attempt is not valid financial evidence.
+  // It must not prevent a subsequent fully verified approval of that same ID.
+  if (!order.accepted_payment_id && previousSnapshot && economicsMatch) {
+    try {
+      if (cents(previousSnapshot.transaction_amount) !== cents(order.expected_amount) ||
+          previousSnapshot.currency_id !== order.currency) previousSnapshot = null;
+    } catch { previousSnapshot = null; }
+  }
+  const decision = decideEnterpriseObservation(previousSnapshot, payment);
+  if (!decision.apply || (order.accepted_payment_id === paymentId && !eligible && !reversed)) {
+    const issue = decision.issue || (decision.apply ? 'invalid_accepted_payment_observation' : null);
+    if (issue) await db.query(`UPDATE enterprise_payment_orders
+      SET reconciliation_issue=COALESCE(reconciliation_issue,$2) WHERE reference=$1`, [order.reference, issue]);
+    return true;
+  }
+  const previouslyReversed = Boolean((order.accepted_payment_id === paymentId && (order.reversal_snapshot || locallyReversed)) || priorAttempt?.reversal_snapshot);
+  if (previouslyReversed && !reversed) {
+    if (order.accepted_payment_id === paymentId) await db.query(`UPDATE enterprise_payment_orders
+      SET settled=false,review_reason='reversal_requires_regularization' WHERE reference=$1`, [order.reference]);
+    return true;
+  }
   const recorded = await db.query(`INSERT INTO enterprise_payment_attempts(payment_id,reference,provider_snapshot,eligible_snapshot,reversal_snapshot)
     VALUES($1,$2,$3::jsonb,$4::jsonb,$5::jsonb)
     ON CONFLICT(payment_id) DO UPDATE SET provider_snapshot=EXCLUDED.provider_snapshot,
@@ -134,16 +164,6 @@ export async function syncEnterprisePayment(payment, db = pool) {
   }
   if (!order.accepted_payment_id && !eligible) return true;
 
-  const localPayment = (await db.query(`SELECT mp_payment_status,metadata FROM pagos
-    WHERE id_orden_externa=$1 AND mp_preference_id=$2 AND mp_payment_id=$3 FOR UPDATE`,
-  [order.reference, order.preference_id, order.accepted_payment_id])).rows[0];
-  const locallyReversed = localPayment && (['refunded','partially_refunded','charged_back'].includes(localPayment.mp_payment_status) || localPayment.metadata?.lastRefundId);
-  const previouslyReversed = Boolean(order.reversal_snapshot || locallyReversed || priorAttempt?.reversal_snapshot);
-  if (previouslyReversed && !reversed) {
-    // Una lectura vieja no reemplaza snapshots ni estado del pago revertido.
-    await db.query(`UPDATE enterprise_payment_orders SET settled=false,review_reason='reversal_requires_regularization' WHERE reference=$1`, [order.reference]);
-    return true;
-  }
   const settled = eligible && !previouslyReversed;
   const reason = reversed || previouslyReversed ? 'reversal_requires_regularization' : settled ? null : 'pending_regularization_or_unconfirmed';
   await db.query(`UPDATE enterprise_payment_orders SET settled=$1,review_reason=$2,

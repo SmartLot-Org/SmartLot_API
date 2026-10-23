@@ -16,6 +16,7 @@ let searchPageSize = null;
 let searchCalls = [];
 let allowRefunds = false;
 let holdProvider;
+let paymentResponseGate;
 const pool = {
   query: (sql, params) => db.query(sql, params),
   connect: async () => {
@@ -43,7 +44,14 @@ mock.module('../src/services/mpService.js', { namedExports: {
   },
   getPayment: async id => {
     providerCalls.push(String(id));
-    return structuredClone(providerById.get(String(id)) || provider);
+    const snapshot = structuredClone(providerById.get(String(id)) || provider);
+    if (paymentResponseGate) {
+      const gate = paymentResponseGate;
+      paymentResponseGate = null;
+      gate.started.resolve();
+      await gate.release.promise;
+    }
+    return snapshot;
   },
   getMerchantOrder: async () => provider.merchantOrder || null,
   searchPayments: async filters => {
@@ -99,6 +107,7 @@ test.before(async () => {
   await db.exec(await readFile(new URL('../migrations/20261022130158_seg03_enterprise_payment_attempts.sql', import.meta.url), 'utf8'));
 });
 test.beforeEach(async () => {
+  paymentResponseGate = null;
   calls = []; holdProvider = null; provider = {}; providerById = new Map(); providerCalls = []; searchResults = null; searchPageSize = null; searchCalls = []; allowRefunds = false;
   await db.exec(`TRUNCATE enterprise_payment_consumptions,enterprise_payment_orders,pagos,consumos_reserva,reservas CASCADE;
     INSERT INTO reservas VALUES(1,2,1),(2,2,1),(3,2,1),(4,2,1),(5,2,1),(6,2,1);
@@ -251,6 +260,161 @@ async function webhookAttempt(order, id, status) {
   const response = await request(app).post('/webhook').send({ id: `attempt-${id}-${status}`, type: 'payment.updated', data: { id } });
   assert.equal(response.status, 200, response.text);
 }
+
+for (const status of ['pending', 'rejected']) test(`carrera mismo pago: ${status} anterior termina despues de approved`, async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  providerById.set('900', { ...approved(order), status, date_last_updated: '2026-10-22T10:00:00.000Z' });
+  const gate = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  paymentResponseGate = gate;
+  const first = request(app).post('/webhook').send({ id: `old-${status}`, type: 'payment.updated', data: { id: '900' } }).then(r => r);
+  await gate.started.promise;
+  let before;
+  try {
+    providerById.set('900', { ...approved(order), date_last_updated: '2026-10-22T10:01:00.000Z' });
+    const second = await request(app).post('/webhook').send({ id: 'new-approved', type: 'payment.updated', data: { id: '900' } });
+    assert.equal(second.status, 200, second.text);
+    before = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+    assert.equal(before.settled, true);
+    assert.equal((await account()).items.flatMap(g => g.movimientos).find(m => m.idConsumo === 1).pagado, true);
+  } finally { gate.release.resolve(); }
+  assert.equal((await first).status, 200);
+  const after = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
+  assert.equal(after.settled, true);
+  assert.equal(after.accepted_payment_id, '900');
+  assert.deepEqual(after.provider_snapshot, before.provider_snapshot);
+  assert.equal((await db.query('SELECT mp_payment_status FROM pagos')).rows[0].mp_payment_status, 'approved');
+  assert.equal((await account()).items.flatMap(g => g.movimientos).find(m => m.idConsumo === 1).pagado, true);
+  assert.deepEqual((await db.query("SELECT provider_snapshot FROM enterprise_payment_attempts WHERE payment_id='900'")).rows[0].provider_snapshot, before.provider_snapshot);
+});
+
+async function deliverSnapshot(snapshot, event = 'observation') {
+  providerById.set(String(snapshot.id), snapshot);
+  const response = await request(app).post('/webhook').send({ id: event, type: 'payment.updated', data: { id: String(snapshot.id) } });
+  assert.equal(response.status, 200, response.text);
+}
+
+async function financialEvidence() {
+  return {
+    order: (await db.query('SELECT provider_snapshot,reversal_snapshot,settled,accepted_payment_id FROM enterprise_payment_orders')).rows[0],
+    payment: (await db.query('SELECT mp_payment_status,metadata FROM pagos')).rows[0],
+    attempt: (await db.query("SELECT provider_snapshot,eligible_snapshot,reversal_snapshot FROM enterprise_payment_attempts WHERE payment_id='900'")).rows[0]
+  };
+}
+
+test('HTTP: pendiente anterior seguido de aprobado mas nuevo en orden normal', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot({ ...approved(order), status: 'pending', date_last_updated: '2026-10-22T10:00:00.000Z' });
+  await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T07:01:00.000-03:00' });
+  assert.equal((await financialEvidence()).order.settled, true);
+});
+
+test('HTTP: intento con importe incorrecto no impide una aprobacion verificada posterior del mismo ID', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot({ ...approved(order), transaction_amount: 0.10 });
+  await deliverSnapshot(approved(order), 'corrected-amount');
+  assert.equal((await financialEvidence()).order.settled, true);
+});
+
+test('HTTP: aceptado historico sin snapshot conserva aprobacion ante pending sin version', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot(approved(order));
+  await db.query('UPDATE enterprise_payment_orders SET provider_snapshot=NULL');
+  await db.query('UPDATE enterprise_payment_attempts SET provider_snapshot=NULL');
+  await deliverSnapshot({ ...approved(order), status: 'pending' }, 'legacy-pending');
+  assert.equal((await financialEvidence()).order.settled, true);
+  assert.equal((await financialEvidence()).payment.mp_payment_status, 'approved');
+  assert.equal((await db.query('SELECT reconciliation_issue FROM enterprise_payment_orders')).rows[0].reconciliation_issue, 'invalid_accepted_payment_observation');
+});
+
+test('HTTP: importe o moneda contradictorios posteriores no reemplazan evidencia aceptada', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:00:00.000Z' });
+  const before = await financialEvidence();
+  for (const patch of [{ transaction_amount: 0.10 }, { currency_id: 'USD' }]) {
+    await deliverSnapshot({ ...approved(order), ...patch, date_last_updated: '2026-10-22T10:01:00.000Z' }, 'bad-economics');
+    assert.deepEqual(await financialEvidence(), before);
+  }
+});
+
+for (const [name, patch] of [
+  ['ausente', {}],
+  ['sin zona', { date_last_updated: '2026-10-22T10:02:00' }],
+  ['fecha imposible', { date_last_updated: '2026-02-30T10:02:00.000Z' }],
+  ['hora imposible', { date_last_updated: '2026-10-22T24:00:00.000Z' }],
+  ['tipo incorrecto', { date_last_updated: 1792663320000 }],
+  ['anterior a creacion', { date_last_updated: '2026-10-22T10:02:00.000Z', date_created: '2026-10-22T11:00:00.000Z' }],
+  ['anterior a aprobacion', { date_last_updated: '2026-10-22T10:02:00.000Z', date_approved: '2026-10-22T11:00:00.000Z' }],
+  ['misma version', { date_last_updated: '2026-10-22T10:01:00.000Z' }],
+  ['version posterior transicion invalida', { date_last_updated: '2026-10-22T10:02:00.000Z' }]
+]) test(`HTTP: contradiccion ${name} conserva evidencia y registra incidencia`, async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:01:00.000Z' });
+  const before = await financialEvidence();
+  await deliverSnapshot({ ...approved(order), status: 'rejected', ...patch }, `conflict-${name}`);
+  assert.deepEqual(await financialEvidence(), before);
+  assert.ok((await db.query('SELECT reconciliation_issue FROM enterprise_payment_orders')).rows[0].reconciliation_issue);
+  const detail = await request(app).get('/900');
+  assert.equal(detail.status, 200, detail.text);
+  assert.equal(detail.body.payment.status, 'approved');
+  searchResults = [{ id: '900' }];
+  const list = await request(app).get('/').query({ external_reference: order.orderId });
+  assert.equal(list.status, 200, list.text);
+  assert.equal(list.body.results[0].status, 'approved');
+  assert.deepEqual(await financialEvidence(), before);
+});
+
+for (const [name, patch, status] of [
+  ['parcial', { transaction_amount_refunded: 1 }, 'partially_refunded'],
+  ['total', { status: 'refunded', transaction_amount_refunded: 120.15 }, 'refunded'],
+  ['contracargo', { status: 'charged_back' }, 'charged_back']
+]) test(`HTTP: reversion ${name} versionada preserva snapshots ante approved antiguo y consultas`, async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  const old = { ...approved(order), date_last_updated: '2026-10-22T10:00:00.000Z' };
+  await deliverSnapshot(old);
+  await deliverSnapshot({ ...old, ...patch, date_last_updated: '2026-10-22T10:01:00.000Z' }, `versioned-${name}`);
+  const before = await financialEvidence();
+  assert.equal(before.order.settled, false);
+  assert.equal(before.payment.mp_payment_status, status);
+  await deliverSnapshot(old, `stale-approved-${name}`);
+  const detail = await request(app).get('/900');
+  assert.equal(detail.status, 200, detail.text);
+  assert.equal(detail.body.payment.status, status);
+  searchResults = [{ id: '900' }];
+  const list = await request(app).get('/').query({ external_reference: order.orderId });
+  assert.equal(list.status, 200, list.text);
+  assert.equal(list.body.results[0].status, status);
+  assert.deepEqual(await financialEvidence(), before);
+});
+
+test('HTTP: reversion parcial progresa a total y una parcial anterior no reemplaza snapshots', async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:00:00.000Z' });
+  const partial = { ...approved(order), transaction_amount_refunded: 1, date_last_updated: '2026-10-22T10:01:00.000Z' };
+  await deliverSnapshot(partial, 'partial');
+  await deliverSnapshot({ ...partial, transaction_amount_refunded: 120.15, status: 'refunded', date_last_updated: '2026-10-22T10:02:00.000Z' }, 'total');
+  const before = await financialEvidence();
+  assert.equal(before.payment.mp_payment_status, 'refunded');
+  await deliverSnapshot(partial, 'old-partial');
+  assert.deepEqual(await financialEvidence(), before);
+});
+
+for (const endpoint of ['id', 'referencia']) test(`HTTP: consulta por ${endpoint} retenida devuelve aprobacion aceptada tras carrera`, async () => {
+  const order = await createEnterprisePreference(admin, { consumosIds: [1] });
+  await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:00:00.000Z' });
+  providerById.set('900', { ...approved(order), status: 'pending', date_last_updated: '2026-10-22T09:59:00.000Z' });
+  searchResults = [{ id: '900' }];
+  const gate = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  paymentResponseGate = gate;
+  const first = (endpoint === 'id' ? request(app).get('/900') : request(app).get('/').query({ external_reference: order.orderId })).then(r => r);
+  await gate.started.promise;
+  try {
+    await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:01:00.000Z' }, 'fresh');
+  } finally { gate.release.resolve(); }
+  const response = await first;
+  assert.equal(response.status, 200, response.text);
+  assert.equal(endpoint === 'id' ? response.body.payment.status : response.body.results[0].status, 'approved');
+  assert.equal((await financialEvidence()).order.provider_snapshot.date_last_updated, '2026-10-22T10:01:00.000Z');
+});
 
 test('regresion HTTP y SQL: rechazado 900 seguido de aprobado 901 salda el consumo', async () => {
   const order = await createEnterprisePreference(admin, { consumosIds: [1] });
