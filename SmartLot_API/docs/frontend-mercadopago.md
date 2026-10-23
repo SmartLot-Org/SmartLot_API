@@ -116,7 +116,7 @@ const res = await fetch(`/api/payments/${paymentId}/refund`, {
    - Visa: `4509 9535 6623 3704`
    - Mastercard: `5031 7557 3453 0604`
    - CVV `123`, cualquier vencimiento futuro, titular `APRO`
-3. **Webhook**: no hay `MP_WEBHOOK_SECRET` → el backend acepta webhooks sin validar firma (modo dev, muestra warning). Cuando el profesor lo configure, agregar al `.env` `MP_WEBHOOK_SECRET` y la verificación HMAC se activa automáticamente.
+3. **Webhook**: `MP_WEBHOOK_SECRET` es obligatorio en todos los entornos, incluidos desarrollo, test y sandbox. Sin él, el endpoint devuelve `503` sin procesar el evento; el resto de la API sigue disponible. Configurarlo exclusivamente en el servidor con la clave de firma de Webhooks del panel de Mercado Pago; no es `MP_ACCESS_TOKEN`. Las pruebas locales usan secretos efímeros y firmas válidas.
 
 ## Checklist final
 
@@ -125,5 +125,5 @@ const res = await fetch(`/api/payments/${paymentId}/refund`, {
 - [ ] Al volver, consultar `GET /api/payments/:paymentId` con el `payment_id` de la URL
 - [ ] Mostrar estados: aprobado / pendiente / rechazado / reembolsado
 - [ ] (Admin) Botón de reembolso total/parcial
-- [ ] Cuando haya acceso: activar `MP_AUTO_RETURN` y `MP_WEBHOOK_SECRET` en backend
+- [ ] Configurar `MP_WEBHOOK_SECRET` en backend antes de recibir webhooks; activar `MP_AUTO_RETURN` cuando corresponda
 - [ ] Registrar el webhook en el dashboard de MP: `{BACKEND_URL}/api/payments/webhook` con eventos `payment.created`, `payment.updated`, `payment.refunded`

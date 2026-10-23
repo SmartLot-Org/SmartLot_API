@@ -1,9 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import express from 'express';
 import request from 'supertest';
+
+// El endpoint requiere configuración incluso cuando esta suite simula el servicio MP.
+process.env.MP_WEBHOOK_SECRET = randomBytes(32).toString('hex');
 
 const db = new PGlite();
 let tail = Promise.resolve();

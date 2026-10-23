@@ -119,55 +119,39 @@ export const getPayment = async (paymentId) => {
   }
 };
 
+// No coercionar arrays/objetos de query o JSON al construir el manifiesto.
+const webhookId = (value) => {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  return typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) ? value : null;
+};
+
 export const verifySignature = (req) => {
   const secret = process.env.MP_WEBHOOK_SECRET;
+  if (!secret?.trim()) return false;
 
-  if (!secret) {
-    console.warn('⚠️ MP_WEBHOOK_SECRET not configured - skipping webhook signature verification (DEV MODE)');
-    return true;
+  const xSignature = req.headers?.['x-signature'];
+  const xRequestId = req.headers?.['x-request-id'];
+  if (typeof xSignature !== 'string' || typeof xRequestId !== 'string' ||
+      !/^[A-Za-z0-9_-]+$/.test(xRequestId)) return false;
+
+  // Mercado Pago firma data.id de la URL, nunca body.id (ID de notificación).
+  const dataId = req.query?.['data.id'];
+  if (typeof dataId !== 'string' || !webhookId(dataId) ||
+      webhookId(req.body?.data?.id) !== dataId) return false;
+
+  const fields = new Map();
+  for (const part of xSignature.split(',')) {
+    const match = /^\s*(ts|v1)=([^=,]+)\s*$/.exec(part);
+    if (!match || fields.has(match[1])) return false;
+    fields.set(match[1], match[2].trim());
   }
+  const ts = fields.get('ts');
+  const hash = fields.get('v1');
+  if (!/^\d+$/.test(ts || '') || !/^[a-fA-F0-9]{64}$/.test(hash || '')) return false;
 
-  const xSignature = req.headers['x-signature'];
-  const xRequestId = req.headers['x-request-id'];
-
-  if (!xSignature || !xRequestId) {
-    console.warn('Missing x-signature or x-request-id headers');
-    return false;
-  }
-
-  const parts = xSignature.split(',');
-  let ts = '';
-  let hash = '';
-
-  parts.forEach((part) => {
-    const [key, value] = part.split('=');
-    if (key.trim() === 'ts') ts = value.trim();
-    if (key.trim() === 'v1') hash = value.trim();
-  });
-
-  if (!ts || !hash) {
-    console.warn('Invalid x-signature format');
-    return false;
-  }
-
-  const dataId = req.query['data.id'] || req.body?.data?.id || req.body?.id;
-
-  if (!dataId) {
-    console.warn('Missing data.id in webhook payload');
-    return false;
-  }
-
-  const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-  const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(manifest);
-  const calculatedHash = hmac.digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(calculatedHash), Buffer.from(hash));
-  } catch (error) {
-    console.error('Signature verification error:', error);
-    return false;
-  }
+  const manifest = `id:${dataId.toLowerCase()};request-id:${xRequestId};ts:${ts};`;
+  const calculatedHash = crypto.createHmac('sha256', secret).update(manifest).digest();
+  return crypto.timingSafeEqual(calculatedHash, Buffer.from(hash, 'hex'));
 };
 
 export const refundPayment = async (paymentId, amount, idempotencyKey) => {

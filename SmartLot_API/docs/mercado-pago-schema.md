@@ -90,7 +90,7 @@ pagos (1) ─────< (N) reembolsos
 ```env
 # Mercado Pago
 MP_ACCESS_TOKEN=APP_USR-xxxxxxxxxxxxxxxxxxxxxxxx
-MP_WEBHOOK_SECRET=<from MP Dashboard > Webhooks > Signing Secret>  # Optional for dev
+MP_WEBHOOK_SECRET=<from MP Dashboard > Webhooks > Signing Secret>  # Required in every environment, including dev/test/sandbox
 MP_AUTO_RETURN=approved  # Optional. Only if Checkout Pro is activated in the account
 
 # URLs

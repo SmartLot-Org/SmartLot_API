@@ -43,7 +43,7 @@ test.beforeEach(() => {
 });
 
 function computeSignature(dataId, requestId, ts, secret) {
-  const manifest = `id:${dataId};request-id:${requestId};ts:${ts};`;
+  const manifest = `id:${dataId.toLowerCase()};request-id:${requestId};ts:${ts};`;
   return crypto.createHmac('sha256', secret).update(manifest).digest('hex');
 }
 
@@ -115,14 +115,14 @@ test('getPayment delega el id al cliente Payment', async () => {
   assert.deepEqual(calls.payment, [{ kind: 'get', id: 'PAY-9' }]);
 });
 
-test('verifySignature en modo dev (sin MP_WEBHOOK_SECRET) acepta cualquier request', () => {
+test('verifySignature sin MP_WEBHOOK_SECRET rechaza cualquier request', () => {
   delete process.env.MP_WEBHOOK_SECRET;
   const ok = verifySignature({ headers: {}, query: {}, body: {} });
-  assert.equal(ok, true);
+  assert.equal(ok, false);
 });
 
 test('verifySignature con secret: firma valida pasa', () => {
-  const secret = 'mi-secret-de-test';
+  const secret = crypto.randomBytes(32).toString('hex');
   process.env.MP_WEBHOOK_SECRET = secret;
   const ts = String(Math.floor(Date.now() / 1000));
   const dataId = 'PAY-123';
@@ -132,13 +132,13 @@ test('verifySignature con secret: firma valida pasa', () => {
   const ok = verifySignature({
     headers: { 'x-signature': `ts=${ts}, v1=${hash}`, 'x-request-id': requestId },
     query: { 'data.id': dataId },
-    body: {}
+    body: { data: { id: dataId } }
   });
   assert.equal(ok, true);
 });
 
 test('verifySignature con secret: firma alterada se rechaza', () => {
-  const secret = 'mi-secret-de-test';
+  const secret = crypto.randomBytes(32).toString('hex');
   process.env.MP_WEBHOOK_SECRET = secret;
   const ts = String(Math.floor(Date.now() / 1000));
   const hash = computeSignature('PAY-123', 'req-abc', ts, secret);
@@ -146,18 +146,18 @@ test('verifySignature con secret: firma alterada se rechaza', () => {
   const ok = verifySignature({
     headers: { 'x-signature': `ts=${ts}, v1=${'0'.repeat(64)}`, 'x-request-id': 'req-abc' },
     query: { 'data.id': 'PAY-123' },
-    body: {}
+    body: { data: { id: 'PAY-123' } }
   });
   assert.equal(ok, false);
 });
 
 test('verifySignature con secret: falta de headers se rechaza', () => {
-  process.env.MP_WEBHOOK_SECRET = 'x';
+  process.env.MP_WEBHOOK_SECRET = crypto.randomBytes(32).toString('hex');
   assert.equal(verifySignature({ headers: {}, query: {}, body: {} }), false);
 });
 
 test('verifySignature con secret: falta data.id se rechaza', () => {
-  const secret = 'mi-secret-de-test';
+  const secret = crypto.randomBytes(32).toString('hex');
   process.env.MP_WEBHOOK_SECRET = secret;
   const ts = String(Math.floor(Date.now() / 1000));
   const hash = computeSignature('PAY-123', 'req-abc', ts, secret);
@@ -170,8 +170,8 @@ test('verifySignature con secret: falta data.id se rechaza', () => {
   assert.equal(ok, false);
 });
 
-test('verifySignature usa data.id del body cuando no viene en query', () => {
-  const secret = 'mi-secret-de-test';
+test('verifySignature exige data.id en query aunque exista en body', () => {
+  const secret = crypto.randomBytes(32).toString('hex');
   process.env.MP_WEBHOOK_SECRET = secret;
   const ts = String(Math.floor(Date.now() / 1000));
   const hash = computeSignature('PAY-123', 'req-abc', ts, secret);
@@ -181,7 +181,22 @@ test('verifySignature usa data.id del body cuando no viene en query', () => {
     query: {},
     body: { data: { id: 'PAY-123' } }
   });
-  assert.equal(ok, true);
+  assert.equal(ok, false);
+});
+
+test('verifySignature rechaza tipos de headers/query sin coerciones ni excepciones', () => {
+  process.env.MP_WEBHOOK_SECRET = crypto.randomBytes(32).toString('hex');
+  for (const value of [null, [], {}, 100, true]) {
+    for (const field of ['x-signature', 'x-request-id', 'data.id']) {
+      const req = {
+        headers: { 'x-signature': 'ts=1,v1=' + 'a'.repeat(64), 'x-request-id': 'req-test' },
+        query: { 'data.id': '100' }, body: { data: { id: '100' } }
+      };
+      if (field === 'data.id') req.query[field] = value;
+      else req.headers[field] = value;
+      assert.equal(verifySignature(req), false);
+    }
+  }
 });
 
 test('refundPayment total usa la operacion total e idempotencia', async () => {

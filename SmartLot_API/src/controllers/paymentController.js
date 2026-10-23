@@ -342,6 +342,11 @@ router.get('/:paymentId', requireRole(1, 2, 4), async (req, res, next) => {
 });
 
 router.post('/webhook', async (req, res, next) => {
+  // Fallar solo este endpoint; ninguna excepción de configuración habilita efectos.
+  if (!process.env.MP_WEBHOOK_SECRET?.trim()) {
+    return res.status(503).json({ error: 'Webhook temporarily unavailable' });
+  }
+  let loggedEventId;
   try {
     const isValid = verifySignature(req);
 
@@ -350,13 +355,22 @@ router.post('/webhook', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    const { id: mpEventId, type: tipoEvento, data } = req.body;
+    const { id: mpEventId, type: tipoEvento, data } = req.body || {};
+    const validEventId = typeof mpEventId === 'string'
+      ? mpEventId.trim().length > 0
+      : Number.isSafeInteger(mpEventId) && mpEventId > 0;
+    if (!validEventId || typeof tipoEvento !== 'string' || !/^[a-z][a-z0-9_.-]*$/.test(tipoEvento)) {
+      return res.status(400).json({ error: 'Invalid webhook payload' });
+    }
+    // verifySignature exige que data.id del body coincida con el ID firmado de query.
+    const paymentId = String(data.id);
 
     await logWebhookEvent(req.body);
+    loggedEventId = mpEventId;
 
     if (tipoEvento === 'payment.created' || tipoEvento === 'payment.updated') {
-      const payment = await getPayment(data.id);
-      if (!payment || String(payment.id) !== String(data.id)) throwError('Identidad de pago contradictoria en el proveedor.', 409);
+      const payment = await getPayment(paymentId);
+      if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', 409);
       if (await syncEnterprisePayment(payment)) {
         // Orden empresarial verificada por asociaciones locales.
       } else if (payment?.metadata?.id_reserva) {
@@ -368,10 +382,10 @@ router.post('/webhook', async (req, res, next) => {
         await savePaymentRecord(payment);
       }
     } else if (tipoEvento === 'payment.refunded') {
-      const payment = await getPayment(data.id);
-      if (!payment || String(payment.id) !== String(data.id)) throwError('Identidad de pago contradictoria en el proveedor.', 409);
+      const payment = await getPayment(paymentId);
+      if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', 409);
       if (!await syncEnterprisePayment(payment)) {
-        await updatePaymentStatus(data.id, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
+        await updatePaymentStatus(paymentId, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
       }
     }
 
@@ -379,9 +393,8 @@ router.post('/webhook', async (req, res, next) => {
 
     res.status(200).json({ received: true });
   } catch (err) {
-    const mpEventId = req.body?.id;
-    if (mpEventId) {
-      await markWebhookProcessed(mpEventId, err.message).catch(() => {});
+    if (loggedEventId !== undefined) {
+      await markWebhookProcessed(loggedEventId, err.message).catch(() => {});
     }
     next(err);
   }

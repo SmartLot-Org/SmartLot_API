@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -5,6 +6,9 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 
 process.env.JWT_SECRET = 'seg-02-test-secret';
+
+// El endpoint requiere configuración incluso cuando esta suite simula el servicio MP.
+process.env.MP_WEBHOOK_SECRET = randomBytes(32).toString('hex');
 
 const users = new Map([
   [1, { id_rol: 1, id_empresa: 10, id_sede: null, tipo_rol: 'admin' }],

@@ -115,7 +115,7 @@ EMAIL_PASS=...
 MP_ACCESS_TOKEN=APP_USR-...   # token sandbox (unico modo habilitado)
 MP_SANDBOX=true               # se deja en true aun en prod; usar false solo con credenciales prod reales
 MP_AUTO_RETURN=approved
-MP_WEBHOOK_SECRET=...         # del dashboard MP, requerido en prod
+MP_WEBHOOK_SECRET=...         # clave de firma del dashboard MP, obligatoria en todos los entornos
 ```
 > `dotenv` no pisa vars ya seteadas por Render, asi que tu `.env` local no interfiere.
 
@@ -144,7 +144,7 @@ curl -i -X POST https://api.smartlot.ar/api/usuario/login -H "Content-Type: appl
 # 4. Webhook MP (solo funciona con https publico)
 # MP Dashboard -> Webhooks -> https://api.smartlot.ar/api/payments/webhook
 # Eventos: payment.created, payment.updated, payment.refunded
-# En prod MP_WEBHOOK_SECRET activo: src/services/mpService.js:122 deja de estar en DEV MODE
+# MP_WEBHOOK_SECRET es obligatorio también en desarrollo/test/sandbox; sin él el webhook devuelve 503 sin efectos
 ```
 
 En browser: DevTools -> Application -> Cookies -> `access_token` debe figurar `Secure` + `HttpOnly` + `SameSite=Lax` tras login prod.
