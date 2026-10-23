@@ -316,20 +316,20 @@ router.patch('/:id/restaurar', requireRole(4, ROLE_NAMES.DUENO_GARAGE, ROLE_NAME
 
 // POST INGRESO VEHICULO SIN RESERVA
 router.post('/:id/ingreso-no-reserva', requireRole(1, 3, 4), async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+    if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
+    const id = Number(req.params.id);
 
-    const data = await svc.registrarIngresoNoReservaAsync(id);
+    const data = await svc.registrarIngresoNoReservaAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });
 
 // POST EGRESO VEHICULO SIN RESERVA
 router.post('/:id/egreso-no-reserva', requireRole(1, 3, 4), async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+    if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
+    const id = Number(req.params.id);
 
-    const data = await svc.registrarEgresoNoReservaAsync(id);
+    const data = await svc.registrarEgresoNoReservaAsync(id, req.usuario);
     if (!data) throwError('No encontrado.', 404);
     res.status(200).json(data);
 });

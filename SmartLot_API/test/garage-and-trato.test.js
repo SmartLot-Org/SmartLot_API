@@ -1,8 +1,10 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import GarageService from '../src/services/garageService.js';
-import TratoEmpresaGarageService from '../src/services/tratoEmpresaGarageService.js';
+// Los fixtures proporcionan clientes y repositorios, sin conexion externa.
+mock.module('../src/database/db.js', { defaultExport: {} });
+const { default: GarageService } = await import('../src/services/garageService.js');
+const { default: TratoEmpresaGarageService } = await import('../src/services/tratoEmpresaGarageService.js');
 
 const owner = { id: 50, tipo_rol: 'dueño_garage' };
 const admin = { id: 10, id_rol: 1, tipo_rol: 'admin', id_empresa: 1 };

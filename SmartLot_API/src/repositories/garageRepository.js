@@ -2,6 +2,23 @@
 import pool from '../database/db.js';
 import { getDiasSemana } from '../helpers/validatorHelper.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
+import { isGarageOccupancyScope } from '../helpers/garageOccupancyAuthorization.js';
+
+// Solo para ocupacion sin reserva. No usa tratos ni los permisos de consulta.
+// Se repite en cada UPDATE aunque el servicio ya haya bloqueado las relaciones.
+function occupancyFilter(scope) {
+    if (!isGarageOccupancyScope(scope)) return { sql: ' AND false', params: [] };
+    let sql = ` AND EXISTS (SELECT 1 FROM usuarios u JOIN roles r ON r.id=u.id_rol
+        WHERE u.id=$2 AND u.id_rol=$3 AND COALESCE(u.activo,true)=true
+        AND COALESCE(u."Borrado",false)=false AND COALESCE(r."Borrado",false)=false
+        AND ($3::integer<>1 OR (u.id_empresa=$4::integer AND u.id_sede IS NOT DISTINCT FROM $5::integer)))`;
+    if (scope.kind === 'assigned') sql += ` AND EXISTS (SELECT 1 FROM usuario_garage ug
+        WHERE ug.id_usuario=$2 AND ug.id_garage=g.id)`;
+    if (scope.kind === 'owned') sql += ` AND EXISTS (SELECT 1 FROM sedes s
+        WHERE s.id=g.id_sede_propia AND s.id_empresa=$4 AND COALESCE(s."Borrado",false)=false
+        AND ($5::integer IS NULL OR s.id=$5))`;
+    return { sql, params: [scope.actorId, scope.roleId, scope.companyId ?? null, scope.siteId ?? null] };
+}
 
 export default class GarageRepository {
     constructor() {
@@ -346,24 +363,54 @@ export default class GarageRepository {
         return result.rows[0] ?? null;
     }
 
-    incrementOcupacionNoReservasAsync = async (id) => {
-        try {
-            const result = await pool.query(
-                'UPDATE garages SET ocupacion_no_reservas = COALESCE(ocupacion_no_reservas, 0) + 1 WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING *',
-                [id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+    lockOccupancyActorAsync = async (scope, client) => {
+        if (!isGarageOccupancyScope(scope)) return null;
+        return (await client.query(`SELECT u.id FROM usuarios u JOIN roles r ON r.id=u.id_rol
+            WHERE u.id=$1 AND u.id_rol=$2 AND COALESCE(u.activo,true)=true
+            AND COALESCE(u."Borrado",false)=false AND COALESCE(r."Borrado",false)=false
+            AND ($2::integer<>1 OR (u.id_empresa=$3::integer AND u.id_sede IS NOT DISTINCT FROM $4::integer))
+            FOR SHARE OF u,r`, [scope.actorId, scope.roleId, scope.companyId ?? null, scope.siteId ?? null])).rows[0] ?? null;
     }
 
-    decrementOcupacionNoReservasAsync = async (id) => {
-        try {
-            const result = await pool.query(
-                'UPDATE garages SET ocupacion_no_reservas = GREATEST(0, COALESCE(ocupacion_no_reservas, 0) - 1) WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING *',
-                [id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+    getForNoReservationOccupancyAsync = async (id, scope, client) => {
+        if (!isGarageOccupancyScope(scope)) return null;
+        if (scope.kind === 'assigned') {
+            // FOR SHARE tambien impide DELETE/UPDATE de la asignacion hasta COMMIT.
+            const assignment = await client.query(`SELECT id_usuario FROM usuario_garage
+                WHERE id_usuario=$1 AND id_garage=$2 FOR SHARE`, [scope.actorId, id]);
+            if (!assignment.rows.length) return null;
+        }
+        const filter = occupancyFilter(scope);
+        const garage = (await client.query(`SELECT g.* FROM garages g WHERE g.id=$1
+            AND COALESCE(g."Borrado",false)=false ${filter.sql} FOR UPDATE OF g`, [id, ...filter.params])).rows[0];
+        if (!garage) return null;
+        if (scope.kind === 'owned') {
+            // g permanece bloqueado: id_sede_propia no cambia. Revalidar s despues
+            // de bloquearla detecta transferencias/bajas previas y evita posteriores.
+            const site = await client.query(`SELECT id FROM sedes WHERE id=$1 AND id_empresa=$2
+                AND ($3::integer IS NULL OR id=$3) AND COALESCE("Borrado",false)=false FOR SHARE`,
+            [garage.id_sede_propia, scope.companyId, scope.siteId]);
+            if (!site.rows.length) return null;
+        }
+        return garage;
+    }
+
+    incrementOcupacionNoReservasAsync = async (id, scope, client = pool) => {
+        const filter = occupancyFilter(scope);
+        return (await client.query(`UPDATE garages g SET ocupacion_no_reservas=COALESCE(g.ocupacion_no_reservas,0)+1
+            WHERE g.id=$1 AND COALESCE(g."Borrado",false)=false ${filter.sql}
+            AND COALESCE(g.ocupacion_no_reservas,0)>=0
+            AND COALESCE(g.ocupacion_no_reservas,0)<COALESCE(g.capacidad_para_no_reservas,g.capacidad,0)
+            AND COALESCE(g.ocupacion_no_reservas,0)+COALESCE(g.ocupacion_reservas,0)<COALESCE(g.capacidad,0)
+            RETURNING g.*`, [id, ...filter.params])).rows[0] ?? null;
+    }
+
+    decrementOcupacionNoReservasAsync = async (id, scope, client = pool) => {
+        const filter = occupancyFilter(scope);
+        // Compatibilidad: egresar estando en cero responde 200 y mantiene cero.
+        return (await client.query(`UPDATE garages g SET ocupacion_no_reservas=GREATEST(0,COALESCE(g.ocupacion_no_reservas,0)-1)
+            WHERE g.id=$1 AND COALESCE(g."Borrado",false)=false ${filter.sql} RETURNING g.*`,
+        [id, ...filter.params])).rows[0] ?? null;
     }
 
     getDiasAsync = async (id_garage) => {

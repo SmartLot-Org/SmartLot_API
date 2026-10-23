@@ -4,6 +4,10 @@ import { readFile } from 'node:fs/promises';
 
 const sends = [];
 
+// Los repositorios se sustituyen en los fixtures; tampoco conectar el pool
+// de la aplicacion durante el import del servicio.
+mock.module('../src/database/db.js', { defaultExport: {} });
+
 mock.module('mailtrap', {
     namedExports: {
         MailtrapClient: class {

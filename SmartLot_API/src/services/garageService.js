@@ -5,6 +5,8 @@ import { isValidDiaSemana } from '../helpers/validatorHelper.js';
 import pool from '../database/db.js';
 import UsuarioGarageService from './usuarioGarageService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
+import { authorizeGarageOccupancy } from '../helpers/garageOccupancyAuthorization.js';
+import { writeError } from '../helpers/writeAuthorization.js';
 
 export default class GarageService {
     constructor() {
@@ -229,45 +231,43 @@ export default class GarageService {
         return await this.repo.removeDiaAsync(id_garage, dia);
     }
 
-    registrarIngresoNoReservaAsync = async (id) => {
-        const garage = await this.repo.getByIdAsync(id);
-        if (!garage) {
-            const error = new Error(`El garage no existe.`);
-            error.statusCode = 404;
+    registrarIngresoNoReservaAsync = async (id, actor) => this._changeNoReservationOccupancy(id, actor, true);
+
+    registrarEgresoNoReservaAsync = async (id, actor) => this._changeNoReservationOccupancy(id, actor, false);
+
+    _changeNoReservationOccupancy = async (id, actor, entering) => {
+        const scope = authorizeGarageOccupancy(actor);
+        if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) throw writeError('El ID proporcionado no es valido.', 400);
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            // La identidad y el contexto se mantienen estables hasta el COMMIT.
+            if (!await this.repo.lockOccupancyActorAsync(scope, client)) {
+                throw writeError('La sesion o su contexto cambiaron. Autentiquese nuevamente.', 401);
+            }
+            const garage = await this.repo.getForNoReservationOccupancyAsync(id, scope, client);
+            if (!garage) throw writeError('Garage no encontrado.', 404);
+            if (entering) {
+                const totalCap = Number(garage.capacidad ?? 0);
+                const capNoRes = Number(garage.capacidad_para_no_reservas ?? totalCap);
+                const currentNoRes = Number(garage.ocupacion_no_reservas ?? 0);
+                const currentRes = Number(garage.ocupacion_reservas ?? 0);
+                if (currentNoRes >= capNoRes) {
+                    throw writeError(`Se superó la capacidad máxima para vehículos sin reserva (${capNoRes}).`, 400);
+                }
+                if (currentNoRes + currentRes >= totalCap) {
+                    throw writeError(`El garage está completamente lleno (capacidad total: ${totalCap}).`, 400);
+                }
+            }
+            const updated = entering ? await this.repo.incrementOcupacionNoReservasAsync(id, scope, client) :
+                await this.repo.decrementOcupacionNoReservasAsync(id, scope, client);
+            if (!updated) throw writeError('La ocupacion o el permiso cambiaron durante la operacion.', 409);
+            await client.query('COMMIT');
+            return updated;
+        } catch (error) {
+            await client.query('ROLLBACK');
             throw error;
-        }
-
-        const totalCap = garage.capacidad || 0;
-        const capNoRes = garage.capacidad_para_no_reservas !== null && garage.capacidad_para_no_reservas !== undefined 
-            ? garage.capacidad_para_no_reservas 
-            : totalCap;
-            
-        const currentNoRes = garage.ocupacion_no_reservas || 0;
-        const currentRes = garage.ocupacion_reservas || 0;
-
-        if (currentNoRes >= capNoRes) {
-            const error = new Error(`Se superó la capacidad máxima para vehículos sin reserva (${capNoRes}).`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        if (currentNoRes + currentRes >= totalCap) {
-            const error = new Error(`El garage está completamente lleno (capacidad total: ${totalCap}).`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        return await this.repo.incrementOcupacionNoReservasAsync(id);
-    }
-
-    registrarEgresoNoReservaAsync = async (id) => {
-        const garage = await this.repo.getByIdAsync(id);
-        if (!garage) {
-            const error = new Error(`El garage no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-        return await this.repo.decrementOcupacionNoReservasAsync(id);
+        } finally { client.release(); }
     }
 
     /**

@@ -4,6 +4,12 @@ import { readFile } from 'node:fs/promises';
 
 const poolState = { client: null };
 
+// El servicio de usuarios se importa indirectamente: no inicializar dbClient
+// ni correo real para estas regresiones de control de acceso.
+mock.module('../src/services/emailService.js', {
+  namedExports: { enviarCorreoDesdePlantilla: async () => { throw new Error('No enviar correo desde pruebas QR'); } },
+});
+
 mock.module('../src/database/db.js', {
   defaultExport: {
     query: async () => ({ rowCount: 0, rows: [] }),
