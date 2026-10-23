@@ -2,9 +2,11 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { supabaseAdmin } from '../services/supabaseAdminClient.js';
 import UsuarioRepository from '../repositories/usuarioRepository.js';
+import { getVerifiedGoogleEmail } from '../helpers/googleIdentity.js';
 
 const router = Router();
 const repo = new UsuarioRepository();
+const GOOGLE_LOGIN_ERROR = 'No se pudo iniciar sesión con Google.';
 
 function throwError(message, statusCode) {
   const error = new Error(message);
@@ -60,7 +62,7 @@ function signTokens(usuario) {
 }
 
 async function createSession(usuario) {
-  const { refreshToken } = signTokens(usuario);
+  const { accessToken, refreshToken } = signTokens(usuario);
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const sessionId = await repo.createSessionAsync(
     usuario.id,
@@ -68,18 +70,8 @@ async function createSession(usuario) {
     refreshToken,
     expiresAt
   );
-  return { sessionId, accessToken: jwt.sign(
-    {
-      id: usuario.id,
-      email: usuario.email,
-      id_rol: usuario.id_rol,
-      id_empresa: usuario.id_empresa,
-      id_sede: usuario.id_sede,
-      token_version: usuario.token_version,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '15m' },
-  ) };
+  if (typeof sessionId !== 'string' || !sessionId.trim()) throwError(GOOGLE_LOGIN_ERROR, 500);
+  return { sessionId, accessToken };
 }
 
 router.get('/google', (req, res) => {
@@ -96,33 +88,39 @@ router.get('/google', (req, res) => {
 
 router.post('/google/callback', async (req, res, next) => {
   try {
-    const { access_token } = req.body;
+    const { access_token } = req.body || {};
 
-    if (!access_token) {
-      throwError('El token de acceso es requerido.', 400);
+    if (typeof access_token !== 'string' || !access_token.trim()) {
+      throwError(GOOGLE_LOGIN_ERROR, 400);
     }
 
-    const { data, error } = await supabaseAdmin.auth.getUser(access_token);
+    if (typeof supabaseAdmin?.auth?.getUser !== 'function') throwError(GOOGLE_LOGIN_ERROR, 503);
+    let result;
+    try {
+      result = await supabaseAdmin.auth.getUser(access_token);
+    } catch {
+      throwError(GOOGLE_LOGIN_ERROR, 503);
+    }
+    const { data, error } = result || {};
 
     if (error || !data?.user) {
-      console.error('[Google Auth] supabaseAdmin.auth.getUser failed:', error?.message);
-      throwError('Token de Google inválido o expirado.', 401);
+      throwError(GOOGLE_LOGIN_ERROR, error?.status >= 500 ? 503 : 401);
     }
 
-    const googleEmail = data.user.email || data.user.user_metadata?.email;
+    const googleEmail = getVerifiedGoogleEmail(data.user);
 
     if (!googleEmail) {
-      throwError('No se pudo obtener el email de la cuenta de Google.', 400);
+      throwError(GOOGLE_LOGIN_ERROR, 401);
     }
 
     const usuario = await repo.getByEmailAsync(googleEmail);
 
     if (!usuario) {
-      throwError('No existe una cuenta con este email.', 401);
+      throwError(GOOGLE_LOGIN_ERROR, 401);
     }
 
-    if (usuario.activo === false) {
-      throwError('Cuenta desactivada.', 403);
+    if (usuario.activo !== true || (usuario.Borrado != null && usuario.Borrado !== false)) {
+      throwError(GOOGLE_LOGIN_ERROR, 403);
     }
 
     const { sessionId, accessToken } = await createSession(usuario);
@@ -138,7 +136,8 @@ router.post('/google/callback', async (req, res, next) => {
       expires_in: process.env.JWT_EXPIRES_IN || '15m',
     });
   } catch (err) {
-    next(err);
+    // No propagar mensajes del proveedor, del repositorio ni material de sesión.
+    next(Object.assign(new Error(GOOGLE_LOGIN_ERROR), { statusCode: [400, 401, 403, 503].includes(err?.statusCode) ? err.statusCode : 500 }));
   }
 });
 
