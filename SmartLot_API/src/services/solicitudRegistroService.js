@@ -52,11 +52,13 @@ export default class SolicitudRegistroService {
         if (empresaNombre.length < 2) fail('El nombre de la empresa es requerido (mínimo 2 caracteres).', 400);
 
         // El estado y los enlaces con empresa/usuario SIEMPRE los decide el servidor, nunca el cliente.
-        const existente = await this.usuarioRepo.getByEmailAsync(email);
-        if (existente) fail(`Ya existe un usuario con el email ${email}.`, 409);
-        if (await this.repo.hasPendingByEmailAsync(email)) fail('Ya existe una solicitud pendiente con ese email.', 409);
-
+        // El mismo trabajo bcrypt para todas las entradas válidas; no rehashear al insertar.
         const contraseña_hash = await bcrypt.hash(contraseña, BCRYPT_ROUNDS);
+        const [existente, pendiente] = await Promise.all([
+            this.usuarioRepo.getByEmailAsync(email, { throwOnError: true }),
+            this.repo.hasPendingByEmailAsync(email),
+        ]);
+        if (existente || pendiente) return;
         const solicitud = await this.repo.createPendingAsync({
             nombre,
             apellido,
@@ -67,7 +69,14 @@ export default class SolicitudRegistroService {
             empresa_descripcion: empresaDescripcion,
         });
 
-        await this._notificarSuperadmins(solicitud);
+        // null significa exclusivamente que otra petición ganó el índice de email pendiente.
+        if (solicitud === null) return;
+        // Best-effort en este proceso: el acuse no espera la entrega de correo.
+        setImmediate(() => {
+            this._notificarSuperadmins(solicitud).catch(() => {
+                console.error('[solicitud-registro] No se pudo completar la notificación.');
+            });
+        });
         return this._sanitizarSolicitud(solicitud);
     };
 

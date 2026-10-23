@@ -17,11 +17,17 @@ const parseId = (value) => {
 // de validación por un superadmin. El estado y los enlaces con empresa/usuario
 // SIEMPRE los decide el servidor, nunca el cliente.
 router.post('', authRateLimiter, async (req, res) => {
-    const data = await svc.createAsync(req.body || {});
-    res.status(201).json({
-        message: 'Solicitud enviada. Un superadmin la validará a la brevedad.',
-        solicitud: data,
+    await svc.createAsync(req.body || {});
+    res.status(202).json({
+        message: 'Recibimos tu solicitud. Si corresponde procesarla, te contactaremos por correo. Si ya tenés una cuenta, podés iniciar sesión o recuperar tu contraseña.',
     });
+}, (err, req, res, next) => {
+    if ((err?.statusCode || err?.status || 500) === 500) {
+        return next(Object.assign(new Error('Error interno del servidor'), {
+            statusCode: 500, preserveAuthCookies: true,
+        }));
+    }
+    next(err);
 });
 
 // LISTAR SOLICITUDES (superadmin)

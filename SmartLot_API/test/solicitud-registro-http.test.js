@@ -8,6 +8,8 @@ import bcrypt from 'bcrypt';
 process.env.BCRYPT_ROUNDS = '4';
 let row, inserted, administrator, company, existingUser, mailFails;
 const mails = [];
+const drainNotifications = () => new Promise(resolve => setImmediate(resolve));
+test.afterEach(drainNotifications);
 const client = {
     release() {},
     async query(sql, params = []) {
@@ -94,24 +96,23 @@ function assertSafe(body) {
     assert.ok(!serialized.includes(inserted.contraseña_hash));
 }
 
-test('SEG-07: creación HTTP conserva contrato y hash interno sin exponer secretos', async () => {
+test('SEG-07: creación HTTP conserva hash interno y solo devuelve el acuse público', async () => {
     reset();
-    const response = await request(app).post(path).send(input).expect(201);
-    assert.equal(response.body.message, 'Solicitud enviada. Un superadmin la validará a la brevedad.');
-    const { contraseña: password, ...publicInput } = input;
-    assert.deepEqual(response.body.solicitud, {
-        id: 7, ...publicInput, estado: 'pendiente', created_at: inserted.created_at,
+    const response = await request(app).post(path).send(input).expect(202);
+    assert.deepEqual(response.body, {
+        message: 'Recibimos tu solicitud. Si corresponde procesarla, te contactaremos por correo. Si ya tenés una cuenta, podés iniciar sesión o recuperar tu contraseña.',
     });
     assert.match(inserted.contraseña_hash, /^\$2[aby]\$\d{2}\$/);
-    assert.equal(await bcrypt.compare(password, inserted.contraseña_hash), true);
+    assert.equal(await bcrypt.compare(input.contraseña, inserted.contraseña_hash), true);
     assertSafe(response.body);
+    await drainNotifications();
     assert.equal(mails.length, 1);
     assert.equal(mails[0][1], 'solicitud_registro_superadmin');
 });
 
 test('SEG-07: listado, consulta y aprobación HTTP sanitizan objetos anidados y reutilizan el hash', async () => {
     reset();
-    await request(app).post(path).send(input).expect(201);
+    await request(app).post(path).send(input).expect(202);
     const originalHash = inserted.contraseña_hash;
     for (const url of [path, `${path}/7`]) {
         const response = await request(app).get(url).expect(200);
@@ -133,7 +134,7 @@ test('SEG-07: listado, consulta y aprobación HTTP sanitizan objetos anidados y 
 
 test('SEG-07: rechazo HTTP conserva el hash interno y no lo devuelve', async () => {
     reset();
-    await request(app).post(path).send(input).expect(201);
+    await request(app).post(path).send(input).expect(202);
     const response = await request(app).patch(`${path}/7/rechazar`).expect(200);
     assertSafe(response.body);
     assert.equal(response.body.estado, 'rechazada');
@@ -147,13 +148,14 @@ test('SEG-07: HTTP mantiene validaciones, duplicados y correo best-effort', asyn
     await request(app).post(path).send({ ...input, contraseña: 'debil' }).expect(400);
     assert.equal(inserted, null);
     existingUser = { id: 20 };
-    await request(app).post(path).send(input).expect(409);
+    await request(app).post(path).send(input).expect(202);
     assert.equal(inserted, null);
     existingUser = null;
     mailFails = true;
-    const response = await request(app).post(path).send(input).expect(201);
+    const response = await request(app).post(path).send(input).expect(202);
     assertSafe(response.body);
+    await drainNotifications();
     assert.equal(mails.length, 1);
-    await request(app).post(path).send(input).expect(409);
+    await request(app).post(path).send(input).expect(202);
     assert.equal(mails.length, 1);
 });

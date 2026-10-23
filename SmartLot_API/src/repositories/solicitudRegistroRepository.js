@@ -14,14 +14,20 @@ export default class SolicitudRegistroRepository {
     }
 
     createPendingAsync = async (entity) => {
-        const result = await this.pool.query(
-            `INSERT INTO solicitudes_registro (nombre, apellido, email, telefono, contraseña_hash, empresa_nombre, empresa_descripcion, estado)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-            [entity.nombre, entity.apellido, entity.email, entity.telefono,
-             entity.contraseña_hash, entity.empresa_nombre, entity.empresa_descripcion,
-             ESTADOS_SOLICITUD.PENDIENTE]
-        );
-        return result.rows[0];
+        try {
+            const result = await this.pool.query(
+                `INSERT INTO solicitudes_registro (nombre, apellido, email, telefono, contraseña_hash, empresa_nombre, empresa_descripcion, estado)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+                [entity.nombre, entity.apellido, entity.email, entity.telefono,
+                 entity.contraseña_hash, entity.empresa_nombre, entity.empresa_descripcion,
+                 ESTADOS_SOLICITUD.PENDIENTE]
+            );
+            if (!result.rows[0]) fail('No se pudo guardar la solicitud.', 500);
+            return result.rows[0];
+        } catch (error) {
+            if (error.code === '23505' && error.constraint === 'uq_solicitudes_registro_email_pendiente') return null;
+            throw error;
+        }
     }
 
     hasPendingByEmailAsync = async (email) => (await this.pool.query(

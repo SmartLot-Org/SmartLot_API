@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const sends = [];
+const drainNotifications = () => new Promise(resolve => setImmediate(resolve));
+test.afterEach(drainNotifications);
 
 // Los repositorios se sustituyen en los fixtures; tampoco conectar el pool
 // de la aplicacion durante el import del servicio.
@@ -85,15 +87,15 @@ test('crear valida campos requeridos y formatos', async () => {
     await assert.rejects(() => svc.createAsync({ ...baseInput, empresa_descripcion: 'x'.repeat(1001) }), { statusCode: 400 });
 });
 
-test('crear rechaza email de usuario existente o solicitud pendiente', async () => {
-    await assert.rejects(
-        () => serviceFixture({ existingUser: { id: 1 } }).svc.createAsync(baseInput),
-        { statusCode: 409 }
-    );
-    await assert.rejects(
-        () => serviceFixture({ pendingByEmail: true }).svc.createAsync(baseInput),
-        { message: 'Ya existe una solicitud pendiente con ese email.' }
-    );
+test('crear no inserta ni notifica si hay usuario existente o solicitud pendiente', async () => {
+    for (const options of [{ existingUser: { id: 1 } }, { pendingByEmail: true }]) {
+        const { svc, created } = serviceFixture(options);
+        sends.length = 0;
+        assert.equal(await svc.createAsync(baseInput), undefined);
+        await drainNotifications();
+        assert.equal(created(), null);
+        assert.equal(sends.length, 0);
+    }
 });
 
 test('crear hashea la contraseña y el servidor decide el estado', async () => {
@@ -298,6 +300,7 @@ test('crear envía un email a cada superadmin con links de acción al frontend',
     });
     sends.length = 0;
     await svc.createAsync(baseInput);
+    await drainNotifications();
     assert.equal(sends.length, 2);
     assert.deepEqual(sends.map((s) => s.to[0].email), ['uno@smartlot.ar', 'dos@smartlot.ar']);
     for (const mail of sends) {
