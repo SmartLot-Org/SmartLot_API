@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
 import { authorizeWrite, authorizeUserEdit, authorizeUserEditDestination, authorizeUserLifecycle, writeError } from '../helpers/writeAuthorization.js';
+import { verifyLogoutCredential } from '../helpers/logoutCredential.js';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
@@ -215,6 +216,21 @@ export default class UsuarioService {
         }
         await this.repo.deleteUserSessionsAsync(id);
         return version;
+    }
+
+    logoutAsync = async (accessToken) => {
+        const credential = verifyLogoutCredential(accessToken);
+        if (!credential) return false;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const revoked = await this.repo.revokeLogoutSessionsAsync(credential.id, credential.tokenVersion, client);
+            await client.query('COMMIT');
+            return revoked;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally { client.release(); }
     }
 
     getGaragistasByGarageIdAsync = async (id_garage, requestingUser = null) => {

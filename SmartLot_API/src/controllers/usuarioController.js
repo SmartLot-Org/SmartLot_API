@@ -120,30 +120,23 @@ router.post('/refresh', authRateLimiter, async (req, res) => {
 });
 
 // LOGOUT
-router.post('/logout', (req, res) => {
-    const accessToken = req.cookies?.access_token;
-    if (accessToken) {
-        try {
-            const decoded = jwt.decode(accessToken);
-            if (decoded?.id) {
-                svc.revocarRefreshTokensAsync(decoded.id).catch(() => {});
-            }
-        } catch {
-            // Si no se puede decodificar, igual limpiamos cookies
-        }
+router.post('/logout', async (req, res) => {
+    try {
+        await svc.logoutAsync(req.cookies?.access_token);
+    } finally {
+        // Limpiar incluso si la credencial es invalida o la transaccion falla.
+        res.clearCookie('access_token', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
+        res.clearCookie('refresh_session_id', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/api/usuario/refresh'
+        });
     }
-
-    res.clearCookie('access_token', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax'
-    });
-    res.clearCookie('refresh_session_id', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/api/usuario/refresh'
-    });
     res.status(200).json({ message: 'Sesion cerrada exitosamente.' });
 });
 

@@ -53,6 +53,17 @@ export default class UsuarioRepository {
         }
     }
 
+    revokeLogoutSessionsAsync = async (id, version, client) => {
+        // El UPDATE comprueba la version persistida y bloquea la fila en la misma
+        // operacion. Un segundo logout con esa version no puede volver a revocar.
+        const updated = await client.query(`UPDATE usuarios SET token_version=token_version+1
+            WHERE id=$1 AND token_version=$2 AND COALESCE(activo,true)=true
+              AND COALESCE("Borrado",false)=false RETURNING id`, [id, version]);
+        if (!updated.rows.length) return false;
+        await client.query('DELETE FROM refresh_sessions WHERE usuario_id=$1', [id]);
+        return true;
+    }
+
     updateReservationLimitAsync = async (id, limit, actor) => {
         const client = await pool.connect();
         try {
