@@ -355,11 +355,21 @@ router.post('/webhook', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    const { id: mpEventId, type: tipoEvento, data } = req.body || {};
+    const { id: mpEventId, type: tipoEvento, action, data } = req.body || {};
     const validEventId = typeof mpEventId === 'string'
       ? mpEventId.trim().length > 0
       : Number.isSafeInteger(mpEventId) && mpEventId > 0;
     if (!validEventId || typeof tipoEvento !== 'string' || !/^[a-z][a-z0-9_.-]*$/.test(tipoEvento)) {
+      return res.status(400).json({ error: 'Invalid webhook payload' });
+    }
+    // Contrato oficial: type es el tópico; action distingue la operación.
+    // Compatibilidad explícita con los antiguos type=payment.created/updated/refunded.
+    const paymentActions = ['payment.created', 'payment.updated', 'payment.refunded'];
+    const accionEvento = tipoEvento === 'payment' ? action
+      : paymentActions.includes(tipoEvento) ? tipoEvento : null;
+    if ((action !== undefined && (typeof action !== 'string' || !/^[a-z][a-z0-9_.-]*$/.test(action))) ||
+        (tipoEvento === 'payment' && !paymentActions.includes(action)) ||
+        (paymentActions.includes(tipoEvento) && action !== undefined && action !== tipoEvento)) {
       return res.status(400).json({ error: 'Invalid webhook payload' });
     }
     // verifySignature exige que data.id del body coincida con el ID firmado de query.
@@ -368,7 +378,7 @@ router.post('/webhook', async (req, res, next) => {
     await logWebhookEvent(req.body);
     loggedEventId = mpEventId;
 
-    if (tipoEvento === 'payment.created' || tipoEvento === 'payment.updated') {
+    if (accionEvento === 'payment.created' || accionEvento === 'payment.updated') {
       const payment = await getPayment(paymentId);
       if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', 409);
       if (await syncEnterprisePayment(payment)) {
@@ -381,7 +391,7 @@ router.post('/webhook', async (req, res, next) => {
         // webhook de reserva ni pool transaccional involucrado.
         await savePaymentRecord(payment);
       }
-    } else if (tipoEvento === 'payment.refunded') {
+    } else if (accionEvento === 'payment.refunded') {
       const payment = await getPayment(paymentId);
       if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', 409);
       if (!await syncEnterprisePayment(payment)) {

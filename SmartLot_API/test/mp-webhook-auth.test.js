@@ -5,13 +5,17 @@ import express from 'express';
 import request from 'supertest';
 
 const secret = crypto.randomBytes(32).toString('hex');
-const state = { queries: [], providerCalls: [], events: new Map(), payments: new Map(), providerId: null };
+const state = { queries: [], providerCalls: [], events: new Map(), payments: new Map(), providerId: null,
+  trace: [], failProvider: false, failPersistence: false, refunded: 0 };
 mock.module('mercadopago', { namedExports: {
   MercadoPagoConfig: class {}, Preference: class {}, PaymentRefund: class {}, MerchantOrder: class {},
   Payment: class {
     async get({ id }) {
       state.providerCalls.push(id);
-      return { id: state.providerId ?? id, status: 'approved', transaction_amount: 100, currency_id: 'ARS' };
+      state.trace.push('provider');
+      if (state.failProvider) throw Object.assign(new Error('Test provider unavailable'), { statusCode: 503 });
+      return { id: state.providerId ?? id, status: 'approved', transaction_amount: 100, currency_id: 'ARS',
+        transaction_amount_refunded: state.refunded };
     }
   }
 } });
@@ -19,18 +23,30 @@ mock.module('../src/database/db.js', { defaultExport: {
   async query(sql, params = []) {
     state.queries.push({ sql, params });
     if (sql.includes('INSERT INTO webhook_eventos')) {
+      state.trace.push('event');
       if (!state.events.has(params[0])) state.events.set(params[0], { processed: false, payload: params[3] });
       return { rows: [], rowCount: 1 };
     }
     if (sql.includes('UPDATE webhook_eventos')) {
+      state.trace.push(params[0] === null ? 'success' : 'error');
       const event = state.events.get(params[1]);
       if (event) Object.assign(event, { processed: true, error: params[0] });
       return { rows: [], rowCount: 1 };
     }
-    if (sql.includes('enterprise_payment_orders')) return { rows: [] };
+    if (sql.includes('enterprise_payment_orders')) {
+      state.trace.push('sync');
+      return { rows: [] };
+    }
     if (sql.includes('INSERT INTO pagos')) {
+      if (state.failPersistence) throw new Error('Test persistence unavailable');
+      state.trace.push('persist');
       // Simula la unicidad/upsert existente de mp_payment_id.
-      state.payments.set(String(params[0]), params);
+      state.payments.set(String(params[3]), params);
+      return { rows: [{ id: 'local-payment' }], rowCount: 1 };
+    }
+    if (sql.includes('UPDATE pagos')) {
+      state.trace.push('persist');
+      state.payments.get(String(params[2]))[4] = params[0];
       return { rows: [{ id: 'local-payment' }], rowCount: 1 };
     }
     throw new Error(`SQL no previsto en el fixture: ${sql}`);
@@ -42,7 +58,7 @@ app.use(express.json());
 app.use('/api/payments', router);
 app.use((err, req, res, next) => res.status(err.statusCode || 500).json({ error: err.message }));
 const path = '/api/payments/webhook';
-const body = () => ({ id: 'existing-event', type: 'payment.updated', data: { id: '100' } });
+const body = () => ({ id: 'existing-event', type: 'payment', action: 'payment.updated', data: { id: '100' } });
 
 function signature(id = '100', requestId = 'test-request', ts = String(Date.now())) {
   const hash = crypto.createHmac('sha256', secret)
@@ -70,7 +86,27 @@ test.beforeEach(() => {
   state.events.set('existing-event', { processed: false, payload: 'previous' });
   state.payments.clear();
   state.providerId = null;
+  state.trace.length = 0;
+  state.failProvider = state.failPersistence = false;
+  state.refunded = 0;
 });
+
+for (const action of ['payment.created', 'payment.updated']) {
+  test(`formato oficial firmado ${action} consulta, sincroniza y persiste antes del éxito`, async () => {
+    const response = await send({ payload: { ...body(), action, status: 'rejected', transaction_amount: 1 } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(state.providerCalls, ['100']);
+    const payment = state.payments.get('100');
+    assert.ok(payment, 'debe persistir el pago obtenido del proveedor');
+    assert.equal(payment[4], 'approved');
+    assert.equal(payment[6], 100);
+    assert.ok(state.trace.indexOf('sync') > state.trace.indexOf('provider'));
+    assert.ok(state.trace.indexOf('persist') > state.trace.indexOf('sync'));
+    assert.ok(state.trace.indexOf('success') > state.trace.indexOf('persist'));
+    assert.equal(state.events.get('existing-event').processed, true);
+    assert.equal(state.events.get('existing-event').error, null);
+  });
+}
 
 test('SEG-08: sin secreto rechaza HTTP sin firma antes de SQL/proveedor', async () => {
   delete process.env.MP_WEBHOOK_SECRET;
@@ -155,4 +191,53 @@ test('SEG-08: ID contradictorio del proveedor conserva el rechazo 409 sin guarda
   assert.equal(state.payments.size, 0);
   assert.equal(state.events.get('existing-event').processed, true);
   assert.match(state.events.get('existing-event').error, /Identidad de pago contradictoria/);
+});
+
+for (const failure of ['failProvider', 'failPersistence']) {
+  test(`formato oficial: ${failure} no devuelve éxito y permite reintento`, async () => {
+    state[failure] = true;
+    const failed = await send();
+    assert.equal(failed.status, failure === 'failProvider' ? 503 : 500);
+    assert.equal(state.payments.size, 0);
+    assert.ok(state.events.get('existing-event').error);
+    assert.ok(!state.trace.includes('success'));
+    state[failure] = false;
+    assert.equal((await send()).status, 200);
+    assert.equal(state.payments.size, 1);
+    assert.equal(state.events.get('existing-event').error, null);
+    assert.equal(state.trace.at(-1), 'success');
+  });
+}
+
+test('compatibilidad explícita con type payment.created/updated sin action', async () => {
+  for (const type of ['payment.created', 'payment.updated']) {
+    assert.equal((await send({ payload: { id: type, type, data: { id: '100' } } })).status, 200);
+  }
+  assert.deepEqual(state.providerCalls, ['100', '100']);
+  assert.equal(state.payments.size, 1);
+});
+
+test('acciones de pago ausentes, inválidas o contradictorias se rechazan sin efectos', async () => {
+  for (const action of [undefined, null, [], {}, 1, '', 'other.updated', 'payment.unknown']) {
+    assert.equal((await send({ payload: { ...body(), action } })).status, 400);
+    noEffects();
+  }
+  assert.equal((await send({ payload: { ...body(), type: 'payment.created' } })).status, 400);
+  noEffects();
+});
+
+test('reembolsos oficiales y legacy conservan clasificación parcial/total del proveedor', async () => {
+  assert.equal((await send()).status, 200);
+  for (const type of ['payment', 'payment.refunded']) {
+    for (const [amount, expected] of [[25, 'partially_refunded'], [100, 'refunded']]) {
+      state.refunded = amount;
+      const response = await send({ payload: { ...body(), type, action: 'payment.refunded',
+        status: 'approved', transaction_amount_refunded: 0 } });
+      assert.equal(response.status, 200);
+      assert.equal(state.payments.get('100')[4], expected);
+      assert.deepEqual(state.trace.slice(-2), ['persist', 'success']);
+    }
+  }
+  assert.deepEqual(state.providerCalls, Array(5).fill('100'));
+  assert.equal(state.payments.size, 1);
 });

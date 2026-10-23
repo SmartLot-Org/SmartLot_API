@@ -165,10 +165,26 @@ for (const [name,patch] of [['importe',{transaction_amount:.10}],['moneda',{curr
     assert.equal((await db.query('SELECT expected_amount FROM enterprise_payment_orders')).rows[0].expected_amount,'120.15');
   });
 }
-test('webhook y sincronizacion reales repetidos solo saldan asociaciones locales y conservan expectativa',async()=>{
+for (const action of ['payment.created', 'payment.updated']) {
+test(`webhook oficial ${action} y sincronizacion repetidos solo saldan asociaciones locales`,async()=>{
   const order=await createEnterprisePreference(admin,{consumosIds:[1]});
   provider={...approved(order),metadata:{consumos_ids:[2,3],id_reserva:99}};
-  for (let i=0;i<2;i++) assert.equal((await request(app).post('/webhook').send({id:'evt',type:'payment.updated',data:{id:'900'}})).status,200);
+  const eventId = `official-${action}`;
+  for (let i=0;i<2;i++) {
+    assert.equal((await request(app).post('/webhook').send({
+      id:eventId,type:'payment',action,data:{id:'900'},status:'rejected',transaction_amount:0.10
+    })).status,200);
+    // Antes de otras lecturas que también sincronizan: el webhook debe haber persistido todo.
+    const persistedOrder = (await db.query('SELECT settled,accepted_payment_id FROM enterprise_payment_orders')).rows[0];
+    assert.deepEqual(persistedOrder,{settled:true,accepted_payment_id:'900'});
+    const payment = (await db.query('SELECT mp_payment_id,mp_payment_status,monto FROM pagos')).rows;
+    assert.deepEqual(payment.map(p=>[p.mp_payment_id,p.mp_payment_status,p.monto]),[['900','approved','120.15']]);
+    const event = (await db.query('SELECT procesado,error_procesamiento FROM webhook_eventos WHERE mp_event_id=$1',[eventId])).rows;
+    assert.deepEqual(event,[{procesado:true,error_procesamiento:null}]);
+    assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_attempts')).rows[0].count,1);
+    assert.deepEqual((await db.query('SELECT consumption_id FROM enterprise_payment_consumptions')).rows.map(r=>r.consumption_id),[1]);
+  }
+  assert.deepEqual(providerCalls,['900','900']);
   await getAuthorizedPayment(admin,'900');
   await listAuthorizedPayments(admin,{external_reference:order.orderId});
   await db.exec(`INSERT INTO reservas VALUES(7,2,1); INSERT INTO consumos_reserva(id,id_reserva,id_empresa,id_sede,id_garage,responsable_pago,importe_generado,fecha_inicio) VALUES(7,7,10,101,1,'empresa',20,'2026-10-02')`);
@@ -182,6 +198,7 @@ test('webhook y sincronizacion reales repetidos solo saldan asociaciones locales
   const second=await createEnterprisePreference(admin,{consumosIds:[1,2]});
   assert.equal(second.amount,30.25);
 });
+}
 test('SQL real: dos solicitudes simultaneas no generan dos preferencias',async()=>{
   let release;
   holdProvider=new Promise(resolve=>{release=resolve;});

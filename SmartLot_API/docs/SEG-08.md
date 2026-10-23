@@ -21,6 +21,33 @@ con el de query; solo después se consulta ese mismo pago al proveedor.
 Se conserva el control del ID devuelto por Mercado Pago y la consulta al
 proveedor como fuente del estado financiero.
 
+### Tópico y acción de pagos
+
+El formato oficial admitido separa el tópico de la operación:
+
+```json
+{ "id": 12345, "type": "payment", "action": "payment.updated", "data": { "id": "100" } }
+```
+
+Con `type: "payment"`, las acciones `payment.created` y `payment.updated`
+consultan el recurso autenticado y ejecutan las rutinas existentes de órdenes
+empresariales, pagos y reservas. `payment.refunded` conserva la rutina de
+reembolsos, con clasificación parcial/total obtenida del proveedor. Importes,
+estados y metadata de la notificación no determinan el estado financiero.
+
+Se conserva explícitamente el formato anterior con
+`type: "payment.created"`, `"payment.updated"` o `"payment.refunded"`, sin
+`action` o con una acción coincidente. Para el tópico `payment`, una acción
+ausente, inválida o no admitida produce 400 antes del registro; una acción
+contradictoria con un tipo anterior también produce 400. Otros tópicos
+conservan el comportamiento previo y no se interpretan como pagos.
+
+El éxito (`200`, evento sin error) se marca después de completar la
+sincronización. Los errores de proveedor o persistencia se propagan con
+respuesta no exitosa y se registran mediante el manejo existente; la entrega
+puede reintentarse, aunque la fila del evento ya exista. No se agrega un filtro
+que descarte el reintento por el campo `procesado`.
+
 Se comprobó el SDK instalado: `mercadopago` 3.3.0 exporta
 `WebhookSignatureValidator`. Se mantiene el verificador propio para conservar
 su contrato booleano y aplicar comprobaciones estrictas sin coercionar arrays
@@ -53,11 +80,40 @@ anteriores que simulan el servicio reciben un secreto efímero para respetar
 el nuevo requisito de configuración; las regresiones de autenticidad no
 simulan `verifySignature()`.
 
-Comando de suites aisladas (154 pruebas aprobadas):
+Comando de suites aisladas (162 pruebas aprobadas tras completar la revisión funcional):
 
 ```sh
 node --experimental-test-module-mocks --test test/mp-service.test.js test/mp-controller.test.js test/mp-webhook-auth.test.js test/enterprise-payment-sql.integration.test.js test/enterprise-payment-attempts-migration.integration.test.js test/manual-refund-route.test.js test/payment-read-access.test.js test/payment-read-sql.integration.test.js
 ```
+
+### Regresión del formato oficial
+
+El controlador confundía `type` con `action`. Se agregaron primero dos
+regresiones firmadas de `payment.created` y `payment.updated` usando router y
+verificador reales, simulando únicamente SDK y SQL. Ambas fallaron antes del
+arreglo: HTTP 200 pero lista de consultas al proveedor vacía en lugar de
+`['100']`. Al adaptar también los fixtures positivos de autenticidad al
+formato oficial, la primera corrida tuvo cuatro fallos de diez casos.
+
+Después, `mp-webhook-auth.test.js` pasa sus 15 casos: comprueba consulta exacta,
+sincronización y persistencia anteriores al marcado de éxito, importe y estado
+del proveedor (100 y approved) pese a valores contradictorios en el body,
+repetición sin duplicados, compatibilidad anterior, reembolsos y errores de
+proveedor/persistencia seguidos de reintento exitoso. Conserva las regresiones
+de secreto, firmas, tipos e identidad contradictoria sin efectos.
+
+La suite empresarial usa PGlite y las rutinas reales de sincronización; su
+fixture de servicio MP sigue simulado, como antes. Para ambas acciones
+oficiales se verifican dos entregas y, antes de cualquier lectura que pudiera
+sincronizar por otro camino, una orden liquidada con pago aceptado 900, un
+único pago approved de 120.15, un único intento y solo el consumo local 1
+asociado. El evento queda procesado sin error. Las pruebas existentes de
+concurrencia, eventos fuera de orden y reembolsos también pasan.
+
+Controles adicionales aprobados: `npm run check:syntax`,
+`npm run check:routes` y `git diff --check`. Durante el desarrollo se corrigió
+una aserción SQL nueva que consultaba una columna `status` inexistente: ahora
+verifica `settled` y `accepted_payment_id`, los campos reales de la orden.
 
 No ejecutar `npm run test:mp` ni `test/mp-integration.test.js` para esta
 verificación: la suite de integración existente importa la aplicación con
