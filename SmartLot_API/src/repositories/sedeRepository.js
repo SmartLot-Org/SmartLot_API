@@ -1,6 +1,8 @@
 // sedeRepository.js
 import pool from '../database/db.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
+import { writeTenantFilter } from '../helpers/writeTenantFilter.js';
+import { writeError } from '../helpers/writeAuthorization.js';
 
 export default class SedeRepository {
     constructor() {
@@ -29,30 +31,44 @@ export default class SedeRepository {
         } catch (error) { console.error(error); return null; }
     }
 
-    createAsync = async (entity) => {
-        try {
-            const result = await pool.query(
-                'INSERT INTO sedes (id_empresa, nombre, descripcion, ubicacion, latitud, longitud) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-                [entity.id_empresa, entity.nombre, entity.descripcion, entity.ubicacion, entity.latitud ?? null, entity.longitud ?? null]
-            );
-            return result.rows[0];
-        } catch (error) { console.error(error); return null; }
+    validateCompanyAsync = async (id, client) => {
+        const company = (await client.query(`SELECT id FROM empresas WHERE id=$1
+            AND COALESCE("Borrado",false)=false FOR SHARE`, [id])).rows[0];
+        if (!company) throw writeError('La empresa de destino no existe.', 400);
     }
 
-    updateAsync = async (id, entity) => {
-        try {
-            const result = await pool.query(
-                'UPDATE sedes SET id_empresa = $1, nombre = $2, descripcion = $3, ubicacion = $4, latitud = $5, longitud = $6 WHERE id = $7 AND COALESCE("Borrado", false) = false RETURNING *',
-                [entity.id_empresa, entity.nombre, entity.descripcion, entity.ubicacion, entity.latitud ?? null, entity.longitud ?? null, id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+    getForWriteAsync = async (id, scope, client) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'sedes.id_empresa', site: 'sedes.id' });
+        return (await client.query(`SELECT * FROM sedes WHERE id=$1
+            AND COALESCE("Borrado",false)=false ${filter.sql} FOR UPDATE`, [id, ...filter.params])).rows[0] ?? null;
     }
 
-    deleteAsync = async (id) => {
-        try {
-            const result = await pool.query('UPDATE sedes SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
-            return result.rowCount > 0;
-        } catch (error) { console.error(error); return false; }
+    createAsync = async (entity, scope, client = pool) => {
+        if (!scope) throw writeError('Falta alcance autorizado.', 401);
+        const filter = writeTenantFilter(scope, 7, { company: 'e.id', site: 'NULL' });
+        return (await client.query(`INSERT INTO sedes(id_empresa,nombre,descripcion,ubicacion,latitud,longitud)
+            SELECT e.id,$2,$3,$4,$5,$6 FROM empresas e WHERE e.id=$1
+            AND COALESCE(e."Borrado",false)=false ${filter.sql} RETURNING *`,
+        [entity.id_empresa, entity.nombre, entity.descripcion, entity.ubicacion, entity.latitud ?? null,
+            entity.longitud ?? null, ...filter.params])).rows[0];
+    }
+
+    updateAsync = async (id, entity, scope, client = pool) => {
+        // Solo campos presentes: un PUT parcial no convierte omisiones en NULL.
+        const fields = ['id_empresa', 'nombre', 'descripcion', 'ubicacion', 'latitud', 'longitud']
+            .filter(field => entity[field] !== undefined);
+        if (!fields.length) return this.getForWriteAsync(id, scope, client);
+        const params = [id, ...fields.map(field => entity[field])];
+        const filter = writeTenantFilter(scope, params.length + 1, { company: 'sedes.id_empresa', site: 'sedes.id' });
+        const destination = scope?.kind === 'company' && fields.includes('id_empresa') ? ' AND $2::integer=sedes.id_empresa' : '';
+        return (await client.query(`UPDATE sedes SET ${fields.map((field, i) => `${field}=$${i + 2}`).join(',')}
+            WHERE id=$1 AND COALESCE("Borrado",false)=false ${filter.sql} ${destination} RETURNING *`,
+        [...params, ...filter.params])).rows[0] ?? null;
+    }
+
+    deleteAsync = async (id, scope, client = pool) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'sedes.id_empresa', site: 'sedes.id' });
+        return (await client.query(`UPDATE sedes SET "Borrado"=true
+            WHERE id=$1 AND COALESCE("Borrado",false)=false ${filter.sql}`, [id, ...filter.params])).rowCount > 0;
     }
 }

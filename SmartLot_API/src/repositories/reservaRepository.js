@@ -2,6 +2,7 @@
 import pool from '../database/db.js';
 import { ACTIVE_RESERVATION_SQL, reservationPolicy, enforceReservationLimit } from '../helpers/reservationPolicy.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
+import { writeTenantFilter } from '../helpers/writeTenantFilter.js';
 
 const withoutQrToken = (row) => {
     if (!row) return row;
@@ -392,10 +393,24 @@ export default class ReservaRepository {
         return withoutQrToken(result.rows[0]);
     }
 
-    cancelarWithClientAsync = async (id, client) => {
+    getForCancellationAsync = async (id, scope, client) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede', owner: 'r.id_usuario' });
+        // Bloquear tambien al titular impide que su empresa/sede cambie entre
+        // autorizacion y escritura; usa el mismo orden que las altas de reservas.
+        const owner = (await client.query(`SELECT id_usuario FROM reservas WHERE id=$1`, [id])).rows[0];
+        if (!owner) return null;
+        await client.query('SELECT id FROM usuarios WHERE id=$1 FOR UPDATE', [owner.id_usuario]);
+        return withoutQrToken((await client.query(`SELECT r.* FROM reservas r
+            JOIN usuarios u ON u.id=r.id_usuario WHERE r.id=$1
+            AND COALESCE(r."Borrado",false)=false ${filter.sql} FOR UPDATE OF r,u`, [id, ...filter.params])).rows[0] ?? null);
+    }
+
+    cancelarWithClientAsync = async (id, client, scope) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede', owner: 'r.id_usuario' });
         const result = await client.query(
-            'UPDATE reservas SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING *',
-            [id]
+            `UPDATE reservas r SET "Borrado"=true FROM usuarios u WHERE r.id=$1
+                AND u.id=r.id_usuario AND COALESCE(r."Borrado",false)=false ${filter.sql} RETURNING r.*`,
+            [id, ...filter.params]
         );
         return withoutQrToken(result.rows[0] ?? null);
     }
@@ -404,16 +419,17 @@ export default class ReservaRepository {
     // abandono el checkout de Mercado Pago o cancelo el pago). Es el mismo
     // efecto que la expiracion por retencion vencida, pero iniciado por el
     // usuario y sin esperar el TTL.
-    liberarRetencionWithClientAsync = async (id, client) => {
+    liberarRetencionWithClientAsync = async (id, client, scope) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede', owner: 'r.id_usuario' });
         const result = await client.query(
-            `UPDATE reservas
+            `UPDATE reservas r
                 SET "Borrado" = true,
                     retencion_pago_hasta = NULL
-              WHERE id = $1
-                AND estado_reserva = 'pendiente_pago'
-                AND COALESCE("Borrado", false) = false
-              RETURNING id`,
-            [id]
+              FROM usuarios u WHERE r.id = $1 AND u.id=r.id_usuario
+                AND r.estado_reserva = 'pendiente_pago'
+                AND COALESCE(r."Borrado", false) = false ${filter.sql}
+              RETURNING r.id`,
+            [id, ...filter.params]
         );
         return result.rowCount > 0;
     }
@@ -459,12 +475,7 @@ export default class ReservaRepository {
         } catch (error) { console.error(error); return null; }
     }
 
-    deleteAsync = async (id) => {
-        try {
-            const result = await pool.query('UPDATE reservas SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
-            return result.rowCount > 0;
-        } catch (error) { console.error(error); return false; }
-    }
+    deleteAsync = async (id, scope, client = pool) => Boolean(await this.cancelarWithClientAsync(id, client, scope));
 
-    cancelarAsync = async (id) => await this.deleteAsync(id);
+    cancelarAsync = async (id, scope, client = pool) => await this.deleteAsync(id, scope, client);
 }

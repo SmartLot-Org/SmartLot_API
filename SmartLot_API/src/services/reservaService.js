@@ -6,6 +6,7 @@ import GarageService from './garageService.js';
 import VehiculoService from './vehiculoService.js';
 import { isValidDiaSemana } from '../helpers/validatorHelper.js';
 import CuentaCorrienteRepository from '../repositories/cuentaCorrienteRepository.js';
+import { authorizeWrite, writeError } from '../helpers/writeAuthorization.js';
 
 export default class ReservaService {
     constructor() {
@@ -299,41 +300,20 @@ export default class ReservaService {
     deleteAsync = async (id, requestingUser = null) => await this.cancelarAsync(id, requestingUser);
 
     cancelarAsync = async (id, requestingUser = null) => {
-        const reserva = await this.repo.getByIdAsync(id);
-        if (!reserva) {
-            const error = new Error(`La reserva con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-        if (requestingUser) {
-            const rol = Number(requestingUser.id_rol);
-            if (rol !== 1 && rol !== 4 && Number(reserva.id_usuario) !== Number(requestingUser.id)) {
-                const error = new Error('No tiene permisos para cancelar esta reserva.');
-                error.statusCode = 403;
-                throw error;
-            }
-        }
-
-        if (reserva.entro && !reserva.salio) {
-            const error = new Error(`La reserva con ID ${id} ya registro su ingreso. Debe registrar la salida antes de cancelarla.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
-        const ahora = new Date();
-        const fechaEntrada = new Date(reserva.fecha_entrada);
-        const limiteCancelacion = new Date(fechaEntrada.getTime() - 30 * 60 * 1000);
-        if (ahora >= limiteCancelacion) {
-            const error = new Error(`La reserva con ID ${id} esta demasiado proxima a su inicio para ser cancelada.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
+        const scope = authorizeWrite(requestingUser, true);
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-
-            const cancelada = await this.repo.cancelarWithClientAsync(id, client);
+            const reserva = await this.repo.getForCancellationAsync(id, scope, client);
+            if (!reserva) throw writeError('Reserva no encontrada.', 404);
+            if (reserva.entro && !reserva.salio) {
+                throw writeError(`La reserva con ID ${id} ya registro su ingreso. Debe registrar la salida antes de cancelarla.`, 400);
+            }
+            const limiteCancelacion = new Date(new Date(reserva.fecha_entrada).getTime() - 30 * 60 * 1000);
+            if (new Date() >= limiteCancelacion) {
+                throw writeError(`La reserva con ID ${id} esta demasiado proxima a su inicio para ser cancelada.`, 400);
+            }
+            const cancelada = await this.repo.cancelarWithClientAsync(id, client, scope);
             if (!cancelada) {
                 const error = new Error(`Error interno al cancelar la reserva con ID ${id}.`);
                 error.statusCode = 500;
@@ -365,30 +345,15 @@ export default class ReservaService {
     // pago y debe poder soltarse en cualquier momento mientras este vigente;
     // si no se libera a mano, vence sola por retencion_pago_hasta.
     liberarRetencionAsync = async (id, requestingUser = null) => {
-        const reserva = await this.repo.getByIdAsync(id);
-        if (!reserva) {
-            const error = new Error(`La reserva con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-        if (requestingUser) {
-            const rol = Number(requestingUser.id_rol);
-            if (rol !== 1 && rol !== 4 && Number(reserva.id_usuario) !== Number(requestingUser.id)) {
-                const error = new Error('No tiene permisos para liberar la retencion de esta reserva.');
-                error.statusCode = 403;
-                throw error;
-            }
-        }
-        if (reserva.estado_reserva !== 'pendiente_pago') {
-            const error = new Error('La reserva no esta pendiente de pago.');
-            error.statusCode = 409;
-            throw error;
-        }
-
+        const scope = authorizeWrite(requestingUser, true);
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-            const liberada = await this.repo.liberarRetencionWithClientAsync(id, client);
+            const reserva = await this.repo.getForCancellationAsync(id, scope, client);
+            if (!reserva) throw writeError('Reserva no encontrada.', 404);
+            if (reserva.estado_reserva !== 'pendiente_pago') throw writeError('La reserva no esta pendiente de pago.', 409);
+            if (reserva.entro && !reserva.salio) throw writeError('La reserva ya registro su ingreso.', 400);
+            const liberada = await this.repo.liberarRetencionWithClientAsync(id, client, scope);
             if (!liberada) {
                 const error = new Error('La retencion ya no esta vigente.');
                 error.statusCode = 409;

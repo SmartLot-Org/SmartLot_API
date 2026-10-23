@@ -27,6 +27,11 @@ mock.module('../src/database/dbClient.js', {
     },
 });
 
+// Las regresiones de usuarios no deben emitir correos reales.
+mock.module('../src/services/emailService.js', {
+    namedExports: { enviarCorreoDesdePlantilla: async () => {} },
+});
+
 const [
     { default: UsuarioService },
     { default: ReservaService },

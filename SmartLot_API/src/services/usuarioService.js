@@ -10,6 +10,7 @@ import { enviarCorreoDesdePlantilla } from './emailService.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
+import { authorizeWrite, authorizeUserLifecycle, writeError } from '../helpers/writeAuthorization.js';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
@@ -326,6 +327,12 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
 
         await this._aplicarReglasDeActualizacion(entity, requestingUser, id);
 
+        // El estado tiene autorizacion y efectos transaccionales propios. Un
+        // formulario completo puede reenviar el valor actual, pero no cambiarlo.
+        if (entity.activo !== undefined && entity.activo !== current.activo) {
+            throw writeError('Para cambiar el estado utilice PATCH /api/usuario/:id/estado.', 400);
+        }
+
         // Un garagista nunca depende de empresa ni sede: si el usuario ya lo es,
         // o si este update le asigna ese rol, los campos se fuerzan a NULL.
         const rolEfectivoId = entity.id_rol !== undefined ? entity.id_rol : current.id_rol;
@@ -373,23 +380,8 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
     }
 
     updateEstadoAsync = async (id, activo, requestingUser = null) => {
-        // 1. Validar primero que el usuario exista
-        const usuario = await this.repo.getByIdAsync(id);
-        if (!usuario) {
-            const error = new Error(`El usuario con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-
-        if (activo === false) {
-            await this._validarSinReservasActivasAsync(id, 'desactivar');
-        }
-
-        // 2. Revocar tokens si se desactiva o reactiva
-        await this.repo.incrementTokenVersionAsync(id);
-
-        // 3. Llamar al repositorio para hacer el update parcial
-        return await this.repo.updateEstadoAsync(id, activo, requestingUser?.id ?? null);
+        if (typeof activo !== 'boolean') throw writeError('El estado debe ser booleano.', 400);
+        return this._changeLifecycleAsync(id, requestingUser, false, activo);
     }
 
     updateContraseñaAsync = async (id, contraseña, requestingUser) => {
@@ -586,16 +578,31 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
     }
 
     deleteAsync = async (id, requestingUser = null) => {
-        const usuario = await this.repo.getByIdAsync(id);
-        if (!usuario) {
-            const error = new Error(`El usuario con ID ${id} no existe.`);
-            error.statusCode = 404;
+        return this._changeLifecycleAsync(id, requestingUser, true);
+    }
+
+    _changeLifecycleAsync = async (id, actor, deleting, activo) => {
+        const scope = authorizeWrite(actor);
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            // El alta de reservas tambien bloquea este usuario antes de insertar.
+            const target = await this.repo.getForLifecycleAsync(id, scope, client);
+            if (!target) throw writeError('Usuario no encontrado.', 404);
+            authorizeUserLifecycle(scope, target);
+            if (deleting || !activo) {
+                await this.repo.validateLifecycleReservationsAsync(id, deleting, client);
+            }
+            const result = deleting ? await this.repo.deleteAsync(id, scope, client) :
+                await this.repo.updateEstadoAsync(id, activo, scope, client);
+            if (!result) throw writeError('El usuario cambio durante la operacion.', 409);
+            await this.repo.revokeLifecycleSessionsAsync(id, client);
+            await client.query('COMMIT');
+            return result;
+        } catch (error) {
+            await client.query('ROLLBACK');
             throw error;
-        }
-
-        await this._validarSinReservasAsync(id, 'eliminar');
-
-        return await this.repo.deleteAsync(id, requestingUser?.id ?? null);
+        } finally { client.release(); }
     }
 
     /**

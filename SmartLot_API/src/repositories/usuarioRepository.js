@@ -1,5 +1,7 @@
 // usuarioRepository.js
 import pool from '../database/db.js';
+import { writeTenantFilter } from '../helpers/writeTenantFilter.js';
+import { writeError } from '../helpers/writeAuthorization.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
 
@@ -229,36 +231,54 @@ export default class UsuarioRepository {
     }
 
     updateAsync = async (id, entity, updatedBy = null) => {
-        try {
-            const result = await pool.query(
-                `UPDATE usuarios SET id_rol=$1, nombre=$2, apellido=$3, id_sede=$4,
-                 email=$5, telefono=$6, contraseña=$7, id_empresa=$8, activo=$9, token_version=$10,
-                 "UpdateBy"=$11, "UpdateAt"=NOW()
-                 WHERE id=$12 AND COALESCE("Borrado", false) = false RETURNING *`,
-                [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
-                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0, updatedBy, id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        // Una edicion de perfil nunca restaura un estado/token_version leido
+        // antes de una desactivacion o revocacion concurrente.
+        const result = await pool.query(
+            `UPDATE usuarios SET id_rol=$1, nombre=$2, apellido=$3, id_sede=$4,
+             email=$5, telefono=$6, contraseña=$7, id_empresa=$8,
+             "UpdateBy"=$9, "UpdateAt"=NOW()
+             WHERE id=$10 AND COALESCE("Borrado", false) = false RETURNING *`,
+            [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
+                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, updatedBy, id]
+        );
+        return result.rows[0] ?? null;
     }
 
-    updateEstadoAsync = async (id, activo, updatedBy = null) => {
-        try {
-            const result = await pool.query(
-                `UPDATE usuarios
-                 SET activo = $1,
-                     "UpdateBy" = $2,
-                     "UpdateAt" = NOW()
-                 WHERE id = $3
-                   AND COALESCE("Borrado", false) = false
-                 RETURNING *`,
-                [activo, updatedBy, id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) {
-            console.error('Error en updateEstadoAsync:', error);
-            return null;
-        }
+    getForLifecycleAsync = async (id, scope, client) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede' });
+        return (await client.query(`SELECT u.*,r.tipo_rol FROM usuarios u
+            JOIN roles r ON r.id=u.id_rol WHERE u.id=$1
+            AND COALESCE(u."Borrado",false)=false ${filter.sql} FOR UPDATE OF u`,
+        [id, ...filter.params])).rows[0] ?? null;
+    }
+
+    validateLifecycleReservationsAsync = async (id, deleting, client) => {
+        const result = await client.query(`SELECT id FROM reservas WHERE id_usuario=$1
+            AND COALESCE("Borrado",false)=false ${deleting ? '' : 'AND COALESCE(salio,false)=false'} LIMIT 1`, [id]);
+        if (result.rows.length) throw writeError(deleting ?
+            'No se puede eliminar el usuario porque tiene reservas asociadas.' :
+            'No se puede desactivar el usuario porque tiene reservas activas.', 400);
+    }
+
+    revokeLifecycleSessionsAsync = async (id, client) => {
+        await client.query('DELETE FROM refresh_sessions WHERE usuario_id=$1', [id]);
+    }
+
+    updateEstadoAsync = async (id, activo, scope, client = pool) => {
+        const filter = writeTenantFilter(scope, 5, { company: 'usuarios.id_empresa', site: 'usuarios.id_sede' });
+        const result = await client.query(
+            `UPDATE usuarios
+             SET activo = $1,
+                 "UpdateBy" = $2,
+                 "UpdateAt" = NOW(),
+                 token_version = COALESCE(token_version,0) + 1
+             WHERE id = $3
+               AND COALESCE("Borrado", false) = false ${filter.sql}
+               AND ($4::boolean OR id_rol<>4)
+             RETURNING *`,
+            [activo, scope?.actorId, id, scope?.kind === 'global', ...filter.params]
+        );
+        return result.rows[0] ?? null;
     }
 
     updateContraseñaAsync = async (id, contraseña, updatedBy = null) => {
@@ -290,19 +310,20 @@ export default class UsuarioRepository {
         } catch (error) { console.error(error); return null; }
     }
 
-    deleteAsync = async (id, deletedBy = null) => {
-        try {
-            const result = await pool.query(
-                `UPDATE usuarios
-                 SET "Borrado" = true,
-                     "DeleteBy" = $1,
-                     "DeleteAt" = NOW()
-                 WHERE id = $2
-                   AND COALESCE("Borrado", false) = false`,
-                [deletedBy, id]
-            );
-            return result.rowCount > 0;
-        } catch (error) { console.error(error); return false; }
+    deleteAsync = async (id, scope, client = pool) => {
+        const filter = writeTenantFilter(scope, 4, { company: 'usuarios.id_empresa', site: 'usuarios.id_sede' });
+        const result = await client.query(
+            `UPDATE usuarios
+             SET "Borrado" = true,
+                 "DeleteBy" = $1,
+                 "DeleteAt" = NOW(),
+                 token_version = COALESCE(token_version,0) + 1
+             WHERE id = $2
+               AND COALESCE("Borrado", false) = false ${filter.sql}
+               AND ($3::boolean OR id_rol<>4)`,
+            [scope?.actorId, id, scope?.kind === 'global', ...filter.params]
+        );
+        return result.rowCount > 0;
     }
 
     getSuperadminsActivosAsync = async () => {
