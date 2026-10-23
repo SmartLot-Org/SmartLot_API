@@ -10,7 +10,7 @@ import { enviarCorreoDesdePlantilla } from './emailService.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
-import { authorizeWrite, authorizeUserLifecycle, writeError } from '../helpers/writeAuthorization.js';
+import { authorizeWrite, authorizeUserEdit, authorizeUserEditDestination, authorizeUserLifecycle, writeError } from '../helpers/writeAuthorization.js';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
@@ -318,65 +318,52 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
     }
 
     updateAsync = async (id, entity, requestingUser) => {
-        const current = await this.repo.getByIdAsync(id);
-        if (!current) {
-            const error = new Error(`El usuario con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
+        return this._withAuthorizedUserEdit(id, requestingUser, async (current, scope, client) => {
+            entity = { ...entity };
+            await this._aplicarReglasDeActualizacion(entity, requestingUser, current, client);
 
-        await this._aplicarReglasDeActualizacion(entity, requestingUser, id);
-
-        // El estado tiene autorizacion y efectos transaccionales propios. Un
-        // formulario completo puede reenviar el valor actual, pero no cambiarlo.
-        if (entity.activo !== undefined && entity.activo !== current.activo) {
-            throw writeError('Para cambiar el estado utilice PATCH /api/usuario/:id/estado.', 400);
-        }
-
-        // Un garagista nunca depende de empresa ni sede: si el usuario ya lo es,
-        // o si este update le asigna ese rol, los campos se fuerzan a NULL.
-        const rolEfectivoId = entity.id_rol !== undefined ? entity.id_rol : current.id_rol;
-        const tipoRolEfectivo = entity.id_rol !== undefined
-            ? (await this.rolService.getByIdAsync(entity.id_rol))?.tipo_rol
-            : current.tipo_rol;
-        if (esRolGaragista({ id: rolEfectivoId, tipo_rol: tipoRolEfectivo })) {
-            entity.id_sede = null;
-            entity.id_empresa = null;
-        }
-
-        // Aislamiento de tenant: un admin no puede mover usuarios a sedes de otra empresa.
-        if (Number(requestingUser.id_rol) === 1 && entity.id_sede) {
-            const sedeTenant = await this.sedeService.getByIdAsync(entity.id_sede, requestingUser);
-            if (!sedeTenant) {
-                const error = new Error('La sede indicada no pertenece a tu organización.');
-                error.statusCode = 403;
-                throw error;
+            // El estado tiene autorizacion y efectos transaccionales propios. Un
+            // formulario completo puede reenviar el valor actual, pero no cambiarlo.
+            if (entity.activo !== undefined && entity.activo !== current.activo) {
+                throw writeError('Para cambiar el estado utilice PATCH /api/usuario/:id/estado.', 400);
             }
-        }
 
-        // Merge: preservar valores actuales para campos no enviados
-        const merged = { ...current, ...entity };
-
-        // Preservar contraseña existente si no se envía una nueva
-        if (entity.contraseña) {
-            merged.contraseña = await bcrypt.hash(entity.contraseña, BCRYPT_ROUNDS);
-        } else {
-            merged.contraseña = current.contraseña;
-        }
-
-        await this._validarRelacionesAsync(merged);
-
-        // Validar email único (excluyendo al usuario actual)
-        if (merged.email) {
-            const existing = await this.repo.getByEmailAsync(merged.email);
-            if (existing && existing.id !== id) {
-                const error = new Error(`Ya existe un usuario con el email ${merged.email}.`);
-                error.statusCode = 400;
-                throw error;
+            // Un garagista nunca depende de empresa ni sede: si el usuario ya lo es,
+            // o si este update le asigna ese rol, los campos se fuerzan a NULL.
+            const rolEfectivoId = entity.id_rol !== undefined ? entity.id_rol : current.id_rol;
+            const tipoRolEfectivo = entity.id_rol !== undefined
+                ? (await this.repo.getEditRoleAsync(entity.id_rol, client))?.tipo_rol
+                : current.tipo_rol;
+            if (esRolGaragista({ id: rolEfectivoId, tipo_rol: tipoRolEfectivo })) {
+                entity.id_sede = null;
+                entity.id_empresa = null;
             }
-        }
 
-        return await this.repo.updateAsync(id, merged, requestingUser?.id ?? null);
+            // Merge: preservar valores actuales para campos no enviados
+            const merged = { ...current, ...entity };
+
+            // Preservar contraseña existente si no se envía una nueva
+            if (entity.contraseña) {
+                merged.contraseña = await bcrypt.hash(entity.contraseña, BCRYPT_ROUNDS);
+            } else {
+                merged.contraseña = current.contraseña;
+            }
+
+            const destination = await this.repo.validateEditDestinationAsync(merged, client);
+            authorizeUserEditDestination(scope, merged, destination);
+
+            // Validar email único (excluyendo al usuario actual)
+            if (merged.email) {
+                const existing = await this.repo.getEditEmailAsync(merged.email, client);
+                if (existing && existing.id !== id) {
+                    const error = new Error(`Ya existe un usuario con el email ${merged.email}.`);
+                    error.statusCode = 400;
+                    throw error;
+                }
+            }
+
+            return await this.repo.updateAsync(id, merged, scope, client);
+        });
     }
 
     updateEstadoAsync = async (id, activo, requestingUser = null) => {
@@ -385,21 +372,16 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
     }
 
     updateContraseñaAsync = async (id, contraseña, requestingUser) => {
-        const current = await this.repo.getByIdAsync(id);
-        if (!current) {
-            const error = new Error(`El usuario con ID ${id} no existe.`);
-            error.statusCode = 404;
-            throw error;
-        }
-
-        await this._aplicarReglasDeActualizacion({}, requestingUser, id);
-
-        const hash = await bcrypt.hash(contraseña, BCRYPT_ROUNDS);
-
-        await this.repo.incrementTokenVersionAsync(id);
-
-        const result = await this.repo.updateContraseñaAsync(id, hash, requestingUser?.id ?? null);
-
+        let current;
+        const result = await this._withAuthorizedUserEdit(id, requestingUser, async (target, scope, client) => {
+            current = target;
+            await this._aplicarReglasDeActualizacion({}, requestingUser, target, client);
+            const hash = await bcrypt.hash(contraseña, BCRYPT_ROUNDS);
+            const updated = await this.repo.updateContraseñaAsync(id, hash, scope, client);
+            if (!updated) throw writeError('El usuario cambio durante la operacion.', 409);
+            await this.repo.revokeLifecycleSessionsAsync(id, client);
+            return updated;
+        });
         const nombreCompleto = `${current.nombre ?? ''} ${current.apellido ?? ''}`.trim() || 'Usuario';
         try {
             await enviarCorreoDesdePlantilla(current.email, 'cambio_contraseña', { nombre: nombreCompleto });
@@ -564,7 +546,7 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
 
         await this.repo.incrementTokenVersionAsync(usuario.id);
         await this.repo.deleteUserSessionsAsync(usuario.id);
-        await this.repo.updateContraseñaAsync(usuario.id, hash, usuario.id);
+        await this.repo.updateRecoveredPasswordAsync(usuario.id, hash);
         await this.repo.markResetCodeUsedAsync(resetCode.id);
 
         const nombreCompleto = `${usuario.nombre ?? ''} ${usuario.apellido ?? ''}`.trim() || 'Usuario';
@@ -663,33 +645,35 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         }
     }
 
-    _aplicarReglasDeActualizacion = async (entity, requestingUser, targetId) => {
+    _withAuthorizedUserEdit = async (id, actor, operation) => {
+        const scope = authorizeUserEdit(actor, id);
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const current = await this.repo.getForEditAsync(id, scope, client);
+            if (!current) throw writeError('Usuario no encontrado.', 404);
+            if (Number(actor.id_rol) === 1) authorizeUserLifecycle(scope, current);
+            const result = await operation(current, scope, client);
+            if (!result) throw writeError('El usuario cambio durante la operacion.', 409);
+            await client.query('COMMIT');
+            return result;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally { client.release(); }
+    }
+
+    _aplicarReglasDeActualizacion = async (entity, requestingUser, current, client) => {
         const rol = Number(requestingUser.id_rol);
         const esAdmin = rol === 1;
         const esSmartlot = rol === 4;
         const esAdminOrSmartlot = esAdmin || esSmartlot;
-        const esPropio = Number(requestingUser.id) === Number(targetId);
+        const esPropio = Number(requestingUser.id) === Number(current.id);
 
         if (!esAdminOrSmartlot && !esPropio) {
             const error = new Error('No tiene permisos para modificar este usuario.');
             error.statusCode = 403;
             throw error;
-        }
-
-        // Aislamiento de tenant: un admin no puede modificar usuarios de otra empresa
-        // (evita toma de cuentas y escalada cross-tenant via email/contraseña/rol).
-        if (esAdmin && !esPropio) {
-            const target = await this.repo.getByIdAsync(targetId);
-            if (!target) {
-                const error = new Error(`El usuario con ID ${targetId} no existe.`);
-                error.statusCode = 404;
-                throw error;
-            }
-            if (Number(target.id_empresa) !== Number(requestingUser.id_empresa)) {
-                const error = new Error('No tiene permisos para modificar usuarios de otra empresa.');
-                error.statusCode = 403;
-                throw error;
-            }
         }
 
         if (esPropio) {
@@ -701,7 +685,7 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         }
 
         if (!esPropio && esAdmin && entity.id_rol !== undefined) {
-            const targetRol = await this.rolService.getByIdAsync(entity.id_rol);
+            const targetRol = await this.repo.getEditRoleAsync(entity.id_rol, client);
             const tipo = targetRol?.tipo_rol?.toLowerCase();
             if (!['cliente', 'empleado', 'garagista'].includes(tipo)) {
                 const error = new Error('No puede asignar el rol indicado.');
@@ -711,6 +695,13 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         }
 
         if (!esPropio && esAdmin && !esSmartlot) {
+            if (entity.id_empresa !== undefined && Number(entity.id_empresa) !== Number(requestingUser.id_empresa)) {
+                throw writeError('La empresa de destino no esta autorizada.', 403);
+            }
+            if (requestingUser.id_sede != null && entity.id_sede !== undefined &&
+                Number(entity.id_sede) !== Number(requestingUser.id_sede)) {
+                throw writeError('La sede de destino no esta autorizada.', 403);
+            }
             delete entity.id_empresa;
         }
 

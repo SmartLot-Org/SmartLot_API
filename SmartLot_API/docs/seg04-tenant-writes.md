@@ -106,7 +106,7 @@ npm run check:routes
 git diff --check
 ```
 
-En PowerShell se uso `npm.cmd`. Resultados finales:
+En PowerShell se uso `npm.cmd`. Resultados de la primera correccion (`c91cf6f`):
 
 - SEG-04 y regresiones usuarios/reservas: 152 aprobadas (78 nuevas), 0 fallos,
   1 omitida. La omitida requiere `TEST_RESERVATION_DATABASE_URL` y un servidor
@@ -119,6 +119,72 @@ un intento de correo bloqueado por el sandbox. Se agrego el mock del servicio de
 correo a esa prueba y se repitio la suite sin envios. Las pruebas nuevas tambien
 simulan correo; los pagos usan el proveedor simulado de la suite existente.
 No se utiliza produccion ni pagos reales.
+
+## Cierre del camino alternativo de edicion general
+
+Base revisada: `c91cf6fcd695c5aa22dd65e237a451a86e09b66c`. El arbol estaba
+limpio al comenzar esta ampliacion de SEG-04.
+
+La primera correccion no autorizaba el origen de `PUT /api/usuario/:id` por sede:
+`_aplicarReglasDeActualizacion` solo comprobaba empresa, el control de sede miraba
+el destino y el UPDATE filtraba solo por ID. Un administrador de sede podia traer
+un empleado de otra sede a la propia y luego desactivarlo por el PATCH protegido.
+El cambio de contraseña y sus alias compartian el helper incompleto.
+
+La reproduccion HTTP nueva se ejecuto antes del cambio sobre el fixture aislado:
+admin 2 (empresa 10, sede 101), empleado 8 (sede 102, activo, token_version 7).
+PUT `{ "id_sede": 101 }` seguido de PATCH estado devolvia `[200,200]` y dejaba al
+empleado en sede 101, inactivo y con token_version 8. La prueba fallo como se
+esperaba. Despues devuelve `[404,404]`: sede 102, activo, version 7 y auditoria
+sin cambios; tampoco se modifican sesiones ni se notifican operaciones denegadas.
+
+Ahora la edicion y el cambio autenticado de contraseña:
+
+- Resuelven el alcance desde el actor validado por el middleware. Admins requieren
+  empresa y, si estan restringidos, sede coincidentes con el usuario original.
+  La edicion propia usa un alcance por ID para conservar los perfiles de empleado,
+  garagista y dueño. El superadmin mantiene alcance global.
+- Inician una transaccion, consultan el usuario original con filtro de alcance y
+  `FOR UPDATE`, y solo despues aplican/normalizan/mezclan el body. Los dos llamados
+  de `_aplicarReglasDeActualizacion` reciben ese registro bloqueado y el cliente SQL.
+- Mantienen el filtro de origen en el UPDATE de perfil y de contraseña. Una
+  lectura anterior no basta si el recurso ya cambio de empresa o sede.
+- Validan separadamente roles, empresa y sede de destino usando el mismo cliente;
+  las relaciones de destino se bloquean con `FOR SHARE`. Las decisiones de permisos
+  estan en `writeAuthorization.js` y las condiciones SQL en los repositorios.
+- Conservan las transferencias del admin general dentro de su empresa, la edicion
+  del superadmin, las restricciones de autoasignacion y las protecciones de estado
+  y tokens del PUT. Un admin tampoco puede editar/degradar ni cambiar la contraseña
+  de un superadmin con empresa/sede artificialmente coincidentes.
+
+El cambio autenticado de contraseña incrementa la version y revoca las sesiones
+en la misma transaccion que escribe la clave/auditoria. Notifica solo despues del
+commit. Los aliases `contrasenia` y `contrase%C3%B1a` recorren este mismo servicio.
+El recupero publico por codigo validado conserva su flujo y utiliza el metodo
+interno explicitamente llamado `updateRecoveredPasswordAsync`; se verifican por
+HTTP tanto el rechazo de codigo incorrecto como el cambio con codigo valido.
+
+Se modificaron `writeAuthorization.js`, `usuarioService.js`, `usuarioRepository.js`,
+`tenant-writes-sql.integration.test.js`, el fixture de regresion de
+`garagista-regla.test.js` y este documento. No hay migraciones, cambios de frontend
+ni cambios en pagos/reservas/sedes para cerrar este camino.
+
+Se repitieron completos los dos comandos de suites anteriores y los checks:
+
+- 189 pruebas de SEG-04 y regresiones usuarios/reservas aprobadas; 1 omitida por
+  falta de `TEST_RESERVATION_DATABASE_URL`. El fixture SQL/HTTP tiene 115 pruebas,
+  37 agregadas en esta ampliacion.
+- 152 pruebas dirigidas de SEG-03 aprobadas, sin omisiones.
+- Total: **341 aprobadas, 0 fallos, 1 omitida**. Sintaxis, rutas y diff aprobados.
+
+Las pruebas nuevas usan promesas controladas para detener el request antes de
+obtener el cliente SQL y cambiar empresa/sede mediante una escritura confirmada
+antes del BEGIN. Tanto perfil como contraseña rechazan la nueva pertenencia fuera
+de alcance. Ademas se ejecuta directamente el UPDATE con una lectura anterior
+tras cambiar la sede, verificando que el filtro SQL impide escribir. Un trigger
+SQL falla al revocar sesiones para comprobar rollback de clave/tokens/auditoria
+y ausencia de notificacion. No se usan sleeps para ordenar estos escenarios.
+Correo y pagos siguen simulados; no se usaron servicios de produccion.
 
 ## Limites
 

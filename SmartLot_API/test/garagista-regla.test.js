@@ -65,6 +65,10 @@ function usuarioServiceFixture({ rol = { id: 3, tipo_rol: 'garagista' }, current
     svc.repo = {
         getByIdAsync: async () => current,
         getByEmailAsync: async () => null,
+        getForEditAsync: async () => current,
+        getEditRoleAsync: async () => rol,
+        getEditEmailAsync: async () => null,
+        validateEditDestinationAsync: async () => {},
         createAsync: async (entity) => { state.created = entity; return { id: 25, ...entity }; },
         createWithClientAsync: async (entity) => { state.createdWithClient = entity; return { id: 25, ...entity }; },
         updateAsync: async (id, entity) => { state.updated = entity; return { id, ...entity }; },

@@ -230,26 +230,51 @@ export default class UsuarioRepository {
         }
     }
 
-    updateAsync = async (id, entity, updatedBy = null) => {
+    updateAsync = async (id, entity, scope, client = pool) => {
         // Una edicion de perfil nunca restaura un estado/token_version leido
         // antes de una desactivacion o revocacion concurrente.
-        const result = await pool.query(
+        const filter = writeTenantFilter(scope, 11, { company: 'usuarios.id_empresa', site: 'usuarios.id_sede', owner: 'usuarios.id' });
+        const result = await client.query(
             `UPDATE usuarios SET id_rol=$1, nombre=$2, apellido=$3, id_sede=$4,
              email=$5, telefono=$6, contraseña=$7, id_empresa=$8,
              "UpdateBy"=$9, "UpdateAt"=NOW()
-             WHERE id=$10 AND COALESCE("Borrado", false) = false RETURNING *`,
+             WHERE id=$10 AND COALESCE("Borrado", false) = false ${filter.sql} RETURNING *`,
             [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
-                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, updatedBy, id]
+                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, scope?.actorId, id, ...filter.params]
         );
         return result.rows[0] ?? null;
     }
 
     getForLifecycleAsync = async (id, scope, client) => {
-        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede' });
+        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede', owner: 'u.id' });
         return (await client.query(`SELECT u.*,r.tipo_rol FROM usuarios u
             JOIN roles r ON r.id=u.id_rol WHERE u.id=$1
             AND COALESCE(u."Borrado",false)=false ${filter.sql} FOR UPDATE OF u`,
         [id, ...filter.params])).rows[0] ?? null;
+    }
+
+    getForEditAsync = async (id, scope, client) => this.getForLifecycleAsync(id, scope, client);
+
+    getEditRoleAsync = async (id, client) => (await client.query(`SELECT * FROM roles
+        WHERE id=$1 AND COALESCE("Borrado",false)=false FOR SHARE`, [id])).rows[0] ?? null;
+
+    getEditEmailAsync = async (email, client) => (await client.query(
+        'SELECT id FROM usuarios WHERE email=$1 AND COALESCE("Borrado",false)=false', [email])).rows[0] ?? null;
+
+    validateEditDestinationAsync = async (entity, client) => {
+        if (!await this.getEditRoleAsync(entity.id_rol, client)) throw writeError('El rol indicado no existe.', 400);
+        if (entity.id_empresa != null) {
+            const company = (await client.query(`SELECT id FROM empresas WHERE id=$1
+                AND COALESCE("Borrado",false)=false FOR SHARE`, [entity.id_empresa])).rows[0];
+            if (!company) throw writeError('La empresa indicada no existe.', 400);
+        }
+        if (entity.id_sede != null) {
+            const site = (await client.query(`SELECT id,id_empresa FROM sedes WHERE id=$1
+                AND COALESCE("Borrado",false)=false FOR SHARE`, [entity.id_sede])).rows[0];
+            if (!site) throw writeError('La sede indicada no existe.', 400);
+            return site;
+        }
+        return null;
     }
 
     validateLifecycleReservationsAsync = async (id, deleting, client) => {
@@ -281,23 +306,19 @@ export default class UsuarioRepository {
         return result.rows[0] ?? null;
     }
 
-    updateContraseñaAsync = async (id, contraseña, updatedBy = null) => {
-        try {
-            const result = await pool.query(
-                `UPDATE usuarios
-                 SET contraseña = $1,
-                     "UpdateBy" = $2,
-                     "UpdateAt" = NOW()
-                 WHERE id = $3
-                   AND COALESCE("Borrado", false) = false
-                 RETURNING *`,
-                [contraseña, updatedBy, id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) {
-            console.error('Error en updateContraseñaAsync:', error);
-            return null;
-        }
+    updateContraseñaAsync = async (id, contraseña, scope, client = pool) => {
+        const filter = writeTenantFilter(scope, 4, { company: 'usuarios.id_empresa', site: 'usuarios.id_sede', owner: 'usuarios.id' });
+        return (await client.query(`UPDATE usuarios SET contraseña=$1,
+            token_version=COALESCE(token_version,0)+1,"UpdateBy"=$2,"UpdateAt"=NOW()
+            WHERE id=$3 AND COALESCE("Borrado",false)=false ${filter.sql} RETURNING *`,
+        [contraseña, scope?.actorId, id, ...filter.params])).rows[0] ?? null;
+    }
+
+    // Solo el recupero por codigo previamente validado llama a este metodo.
+    // Mantiene separado ese contexto interno de las escrituras autenticadas.
+    updateRecoveredPasswordAsync = async (id, contraseña) => {
+        return (await pool.query(`UPDATE usuarios SET contraseña=$1,"UpdateBy"=$2,"UpdateAt"=NOW()
+            WHERE id=$2 AND COALESCE("Borrado",false)=false RETURNING *`, [contraseña, id])).rows[0] ?? null;
     }
 
     incrementTokenVersionAsync = async (id) => {
