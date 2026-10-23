@@ -80,6 +80,14 @@ router.post('/login', authRateLimiter, async (req, res) => {
         token_type: 'Bearer',
         expires_in: '15m'
     });
+}, (err, req, res, next) => {
+    // Solo login: un fallo interno tampoco debe borrar las cookies de una sesión previa.
+    if ((err?.statusCode || err?.status || 500) === 500) {
+        return next(Object.assign(new Error('Error interno del servidor'), {
+            statusCode: 500, preserveAuthCookies: true
+        }));
+    }
+    next(err);
 });
 
 // REFRESH TOKEN

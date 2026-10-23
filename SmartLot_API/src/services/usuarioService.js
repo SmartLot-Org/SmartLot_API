@@ -10,11 +10,16 @@ import UsuarioGarageService from './usuarioGarageService.js';
 import { enviarCorreoDesdePlantilla } from './emailService.js';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import { randomBytes } from 'node:crypto';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
 import { authorizeWrite, authorizeUserEdit, authorizeUserEditDestination, authorizeUserLifecycle, writeError } from '../helpers/writeAuthorization.js';
 import { verifyLogoutCredential } from '../helpers/logoutCredential.js';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
+// Una sola preparación por proceso, con el costo configurado. Nunca autoriza una sesión.
+const LOGIN_DUMMY_HASH = bcrypt.hash(randomBytes(32).toString('hex'), BCRYPT_ROUNDS);
+const usableLoginHash = value => typeof value === 'string' &&
+    /^\$2[ab]\$(?:0[4-9]|[12]\d|3[01])\$[./A-Za-z0-9]{53}$/.test(value);
 
 // Regla de negocio: un garagista no depende de empresa ni sede. Su relacion con
 // los garages vive exclusivamente en `usuario_garage`. El servidor fuerza estos
@@ -54,26 +59,14 @@ export default class UsuarioService {
     getAuditAsync = async () => await this.repo.getAuditAsync();
 
     loginAsync = async (credentials) => {
-        const usuario = await this.repo.getByEmailAsync(credentials.email);
-
-        if (!usuario) {
-            const error = new Error('Credenciales incorrectas.');
-            error.statusCode = 401;
-            throw error;
-        }
-
-        if (usuario.activo === false) {
-            const error = new Error('Cuenta desactivada.');
-            error.statusCode = 403;
-            throw error;
-        }
-
+        const usuario = await this.repo.getByEmailAsync(credentials.email, { throwOnError: true });
+        const hasRealHash = usableLoginHash(usuario?.contraseña);
         const coincide = await bcrypt.compare(
             credentials.contraseña,
-            usuario.contraseña
+            hasRealHash ? usuario.contraseña : await LOGIN_DUMMY_HASH
         );
 
-        if (!coincide) {
+        if (!usuario || !hasRealHash || usuario.activo === false || usuario.Borrado === true || !coincide) {
             const error = new Error('Credenciales incorrectas.');
             error.statusCode = 401;
             throw error;
@@ -112,8 +105,14 @@ export default class UsuarioService {
             usuario.id,
             usuario.token_version,
             refreshToken,
-            expiresAt
+            expiresAt,
+            { throwOnError: true }
         );
+        if (!sessionId) {
+            const error = new Error('No se pudo crear la sesión.');
+            error.statusCode = 500;
+            throw error;
+        }
 
         return {
             usuario: usuarioSinContraseña,

@@ -5,8 +5,10 @@ const errorHandler = (err, req, res, next) => {
 
     if (statusCode === 500 && !isNotFoundCode) {
         console.error('Error no manejado:', err);
-        res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
-        res.clearCookie('refresh_session_id', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/api/usuario/refresh' });
+        if (!err.preserveAuthCookies) {
+            res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
+            res.clearCookie('refresh_session_id', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/api/usuario/refresh' });
+        }
     }
 
     if (statusCode === 404) {

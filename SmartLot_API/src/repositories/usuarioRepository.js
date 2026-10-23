@@ -10,7 +10,7 @@ export default class UsuarioRepository {
         console.log('Estoy en: UsuarioRepository.constructor()');
     }
 
-    createSessionAsync = async (usuario_id, token_version, refresh_token, expires_at) => {
+    createSessionAsync = async (usuario_id, token_version, refresh_token, expires_at, { throwOnError = false } = {}) => {
         try {
             const result = await pool.query(
                 `INSERT INTO refresh_sessions (usuario_id, token_version, refresh_token, expires_at)
@@ -19,6 +19,7 @@ export default class UsuarioRepository {
             );
             return result.rows[0].id;
         } catch (error) {
+            if (throwOnError) throw error;
             console.error('Error en createSessionAsync:', error);
             return null;
         }
@@ -145,7 +146,7 @@ export default class UsuarioRepository {
         } catch (error) { console.error(error); return null; }
     }
 
-    getByEmailAsync = async (email) => {
+    getByEmailAsync = async (email, { throwOnError = false } = {}) => {
         try {
             const result = await pool.query(
                 `SELECT u.*, r.tipo_rol,
@@ -163,7 +164,11 @@ export default class UsuarioRepository {
                 [email]
             );
             return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        } catch (error) {
+            if (throwOnError) throw error;
+            console.error(error);
+            return null;
+        }
     }
 
     getAuditAsync = async () => {
