@@ -142,17 +142,8 @@ router.post('/logout', async (req, res) => {
 
 // RECUPERAR CLAVE - solicitar código de verificación
 router.post('/recuperar-clave', authRateLimiter, async (req, res) => {
-    const { email } = req.body;
-
-    if (!email || typeof email !== 'string') {
-        return res.status(200).json({ message: 'Si el email está registrado, te enviamos un código de verificación.' });
-    }
-
-    if (!isValidEmail(email)) {
-        return res.status(200).json({ message: 'Si el email está registrado, te enviamos un código de verificación.' });
-    }
-
-    const result = await svc.solicitarRecuperoAsync(email.trim().toLowerCase());
+    const result = await svc.solicitarRecuperoAsync(req.body?.email);
+    res.set('Retry-After', String(result.retry_after));
     res.status(200).json(result);
 });
 

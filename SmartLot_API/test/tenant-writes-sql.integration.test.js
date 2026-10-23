@@ -5,6 +5,7 @@ import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import { readFile } from 'node:fs/promises';
 
 // PostgreSQL aislado; controllers, middleware, servicios y SQL reales.
 const db = new PGlite();
@@ -88,6 +89,7 @@ test.before(async () => {
     INSERT INTO roles VALUES(1,'admin'),(2,'cliente'),(3,'garagista'),(4,'superadmin'),(5,'dueño_garage');
     INSERT INTO empresas VALUES(10,'A'),(20,'B');
   `);
+  await db.exec(await readFile(new URL('../migrations/20261023020040_seg06_recovery_codes.sql',import.meta.url),'utf8'));
 });
 test.beforeEach(async () => {
   emails = 0;

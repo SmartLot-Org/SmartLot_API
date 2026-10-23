@@ -325,13 +325,6 @@ export default class UsuarioRepository {
         [contraseña, scope?.actorId, id, ...filter.params])).rows[0] ?? null;
     }
 
-    // Solo el recupero por codigo previamente validado llama a este metodo.
-    // Mantiene separado ese contexto interno de las escrituras autenticadas.
-    updateRecoveredPasswordAsync = async (id, contraseña) => {
-        return (await pool.query(`UPDATE usuarios SET contraseña=$1,"UpdateBy"=$2,"UpdateAt"=NOW()
-            WHERE id=$2 AND COALESCE("Borrado",false)=false RETURNING *`, [contraseña, id])).rows[0] ?? null;
-    }
-
     incrementTokenVersionAsync = async (id) => {
         try {
             const result = await pool.query(
@@ -376,58 +369,4 @@ export default class UsuarioRepository {
         }
     }
 
-    invalidatePreviousResetCodesAsync = async (id_usuario) => {
-        try {
-            await pool.query(
-                `UPDATE password_reset_codes
-                 SET usado = true
-                 WHERE id_usuario = $1 AND usado = false AND expires_at > NOW()`,
-                [id_usuario]
-            );
-        } catch (error) {
-            console.error('Error en invalidatePreviousResetCodesAsync:', error);
-        }
-    }
-
-    createResetCodeAsync = async (id_usuario, codigoHash, expiresAt) => {
-        try {
-            const result = await pool.query(
-                `INSERT INTO password_reset_codes (id_usuario, codigo_hash, expires_at)
-                 VALUES ($1, $2, $3) RETURNING id`,
-                [id_usuario, codigoHash, expiresAt]
-            );
-            return result.rows[0]?.id ?? null;
-        } catch (error) {
-            console.error('Error en createResetCodeAsync:', error);
-            return null;
-        }
-    }
-
-    getValidResetCodeAsync = async (id_usuario) => {
-        try {
-            const result = await pool.query(
-                `SELECT id, codigo_hash, expires_at
-                 FROM password_reset_codes
-                 WHERE id_usuario = $1 AND usado = false AND expires_at > NOW()
-                 ORDER BY creado_en DESC
-                 LIMIT 1`,
-                [id_usuario]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) {
-            console.error('Error en getValidResetCodeAsync:', error);
-            return null;
-        }
-    }
-
-    markResetCodeUsedAsync = async (id) => {
-        try {
-            await pool.query(
-                `UPDATE password_reset_codes SET usado = true WHERE id = $1`,
-                [id]
-            );
-        } catch (error) {
-            console.error('Error en markResetCodeUsedAsync:', error);
-        }
-    }
 }
