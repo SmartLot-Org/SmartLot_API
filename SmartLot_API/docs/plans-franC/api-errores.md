@@ -114,7 +114,7 @@ Un `catch` en un repository o service es válido solo si **traduce un caso conoc
 
 ## 10. Estado de los hallazgos del informe (sección 2.3)
 
-"Resuelto en" indica la fase del plan. **Nada está commiteado todavía**: la columna se completa con el hash cuando se commitee (el trabajo vive en la rama `api-rest-improvement`).
+"Resuelto en" indica la fase del plan. Todo el trabajo está en la rama `api-rest-improvement`: código y tests en el commit `62cd310`, documentación en `6d22564`.
 
 | Hallazgo | Sev. | Estado | Resuelto en | Evidencia (tests) |
 |---|---|---|---|---|
