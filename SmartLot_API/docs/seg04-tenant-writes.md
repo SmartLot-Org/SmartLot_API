@@ -159,7 +159,7 @@ Ahora la edicion y el cambio autenticado de contraseña:
 
 El cambio autenticado de contraseña incrementa la version y revoca las sesiones
 en la misma transaccion que escribe la clave/auditoria. Notifica solo despues del
-commit. Los aliases `contrasenia` y `contrase%C3%B1a` recorren este mismo servicio.
+commit. La ruta canónica es `PATCH /api/usuario/:id/contrasenia`; los alias con ñ (`contraseña`, `contrase%C3%B1a`) se eliminaron.
 El recupero publico por codigo validado conserva su flujo y utiliza el metodo
 interno explicitamente llamado `updateRecoveredPasswordAsync`; se verifican por
 HTTP tanto el rechazo de codigo incorrecto como el cambio con codigo valido.

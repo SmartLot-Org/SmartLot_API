@@ -117,7 +117,7 @@ BACKEND_URL=http://localhost:3000
 2. **Frontend**: Redirects to `init_point` from preference response
 3. **User**: Pays on Mercado Pago site
 4. **MP**: Redirects to `back_urls.success` with `payment_id` and `preference_id` query params
-4. **Frontend**: Calls `GET /api/payments/:paymentId` to confirm status
+4. **Frontend**: Calls `POST /api/payments/:paymentId/verificar` to confirm status (queries MP and syncs `pagos`; `GET /api/payments/:paymentId` only reads the local state)
 5. **MP**: Sends webhook to `/api/payments/webhook` (async, backup confirmation)
 6. **Backend**: Updates `pagos` record with `mp_payment_id`, status, approval date
 7. **Frontend**: Shows success/failure page based on payment status

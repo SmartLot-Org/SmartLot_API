@@ -10,7 +10,7 @@ Guía de lo que falta construir en el frontend para completar el flujo de pago.
 3. Frontend redirige al init_point (Checkout Pro de Mercado Pago)
 4. Usuario paga en el sitio de Mercado Pago
 5. MP redirige a /payment/success (o /failure / /pending) con query params
-6. Frontend consulta el estado real del pago: GET /api/payments/:paymentId
+6. Frontend verifica el pago con Mercado Pago: POST /api/payments/:paymentId/verificar
 7. Webhook (asíncrono) actualiza el estado en la BD como respaldo
 ```
 
@@ -19,7 +19,9 @@ Guía de lo que falta construir en el frontend para completar el flujo de pago.
 | Método | Ruta | Auth | Body / Query | Respuesta |
 |--------|------|------|--------------|-----------|
 | POST | `/api/payments/preference` | ✅ | `{ items: [{ id, title, unit_price, quantity }], orderId, backUrls? }` | `{ preferenceId, initPoint, sandboxInitPoint }` |
-| GET | `/api/payments/:paymentId` | ✅ | — | `{ payment: { id, status, transactionAmount, ... }, saved }` |
+| POST | `/api/payments/:paymentId/verificar` | ✅ | `{ externalReference?, preferenceId? }` | `{ payment: { id, status, transactionAmount, ... } }` (consulta a MP y sincroniza el registro local) |
+| POST | `/api/payments/verificar` | ✅ | `{ externalReference, preferenceId? }` | `{ results, paging, totals }` (sincroniza por referencia y devuelve la lista local) |
+| GET | `/api/payments/:paymentId` | ✅ | — | `{ payment: { id, status, transactionAmount, ... } }` (solo lectura del estado local; 404 si aún no se sincronizó) |
 | POST | `/api/payments/:paymentId/refund` | ✅ | `{ amount?, motivo? }` | `{ refundId, status, amount }` |
 | GET | `/api/payments` | ✅ | `?external_reference=&status=&from=&to=` | lista de pagos |
 
@@ -122,7 +124,7 @@ const res = await fetch(`/api/payments/${paymentId}/refund`, {
 
 - [ ] Crear rutas `/payment/success`, `/payment/failure`, `/payment/pending` en el frontend
 - [ ] Flujo: confirmar reserva → POST `/preference` → redirigir a `initPoint`
-- [ ] Al volver, consultar `GET /api/payments/:paymentId` con el `payment_id` de la URL
+- [ ] Al volver, verificar con `POST /api/payments/:paymentId/verificar` usando el `payment_id` de la URL
 - [ ] Mostrar estados: aprobado / pendiente / rechazado / reembolsado
 - [ ] (Admin) Botón de reembolso total/parcial
 - [ ] Configurar `MP_WEBHOOK_SECRET` en backend antes de recibir webhooks; activar `MP_AUTO_RETURN` cuando corresponda

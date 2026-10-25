@@ -2,14 +2,20 @@
 
 El endpoint público `POST /api/payments/webhook` requiere `MP_WEBHOOK_SECRET`
 en todos los entornos. Un valor ausente, vacío o compuesto solo por espacios
-produce `503 { "error": "Webhook temporarily unavailable" }`, sin SQL ni
-consultas al proveedor. No bloquea el arranque ni el resto de la API.
+produce `503` con el payload estándar de la API
+(`{ "error": true, "message": "Webhook no disponible temporalmente.", "statusCode": 503 }`),
+sin SQL ni consultas al proveedor. No bloquea el arranque ni el resto de la API.
 
 La firma ausente, incorrecta o mal formada y los IDs contradictorios producen
-`400 { "error": "Invalid signature" }`. Un sobre de notificación inválido
-(ID de evento o tipo ausentes/inválidos) produce
-`400 { "error": "Invalid webhook payload" }`. Ninguno registra un evento válido
+`401 { "error": true, "message": "Firma de webhook inválida.", "statusCode": 401 }`.
+Un sobre de notificación inválido (ID de evento o tipo ausentes/inválidos) produce
+`400` con el mensaje `Payload de webhook inválido.`. Ninguno registra un evento válido
 ni marca un evento existente como procesado/fallido.
+
+> Cambio posterior (mejora de la API REST): antes la firma inválida respondía `400 { "error": "Invalid signature" }`
+> y el sobre inválido `400 { "error": "Invalid webhook payload" }`. La firma inválida pasó a 401 (no se pudo
+> autenticar al emisor) y las respuestas del webhook usan el formato de error común descrito en `docs/plans-franC/api-errores.md`.
+> Los errores del proveedor de pagos al procesar un evento válido se informan como `502` con `code: "MP_UPSTREAM_ERROR"`.
 
 ## Contrato y corrección
 
@@ -137,5 +143,5 @@ credenciales ni servicios reales.
    migraciones ni despliegue del frontend.
 5. En el entorno de prueba de Mercado Pago, verificar una notificación
    firmada y coherente. Debe devolver 200; sin configuración, 503; con firma
-   inválida o IDs contradictorios, 400 sin efectos. No se realizaron estas
+   inválida o IDs contradictorios, 401 sin efectos. No se realizaron estas
    comprobaciones externas durante la corrección local.

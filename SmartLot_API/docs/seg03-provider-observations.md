@@ -36,9 +36,11 @@ que pueda bloquear una aprobacion posterior verificada de un intento no aceptado
 La decision se toma bajo el bloqueo de la orden y antes de sobrescribir el intento,
 la orden o `pagos`. Se conserva la atomicidad existente. La proteccion de reversiones
 manuales tambien se aplica antes de descartar una observacion duplicada o antigua.
-La consulta por ID vuelve a leer el estado autorizado persistido despues de sincronizar;
-los intentos no aceptados usan su snapshot conservado. El listado por referencia
-continua verificando los detalles y leyendo el pago local aceptado.
+La verificacion por ID (`POST /api/payments/:paymentId/verificar`) vuelve a leer el estado
+autorizado persistido despues de sincronizar; los intentos no aceptados usan su snapshot
+conservado. La verificacion por referencia (`POST /api/payments/verificar`) continua
+verificando los detalles y leyendo el pago local aceptado. La consulta GET por ID solo lee
+ese estado local (o el snapshot del intento) y no consulta al proveedor.
 
 No hay columnas ni migraciones nuevas: las fechas del proveedor ya estan en los
 snapshots JSONB existentes. Las migraciones anteriores quedan intactas.
