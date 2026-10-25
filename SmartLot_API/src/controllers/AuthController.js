@@ -3,16 +3,11 @@ import jwt from 'jsonwebtoken';
 import { supabaseAdmin } from '../services/supabaseAdminClient.js';
 import UsuarioRepository from '../repositories/usuarioRepository.js';
 import { getVerifiedGoogleEmail } from '../helpers/googleIdentity.js';
+import { throwError } from '../helpers/httpError.js';
 
 const router = Router();
 const repo = new UsuarioRepository();
 const GOOGLE_LOGIN_ERROR = 'No se pudo iniciar sesión con Google.';
-
-function throwError(message, statusCode) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  throw error;
-}
 
 const FRONTEND_URL = process.env.FRONTEND_URL?.replace(/\/+$/, '') || 'http://localhost:5173';
 const SUPABASE_PROJECT_URL = process.env.SUPABASE_URL;

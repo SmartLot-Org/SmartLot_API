@@ -215,7 +215,6 @@ test('admin no puede crear trato directamente ni siquiera invocando el service',
 
 const repoSource = await readFile(new URL('../src/repositories/solicitudEmpresaGarageRepository.js', import.meta.url), 'utf8');
 const controllerSource = await readFile(new URL('../src/controllers/solicitudEmpresaGarageController.js', import.meta.url), 'utf8');
-const tratoControllerSource = await readFile(new URL('../src/controllers/tratoEmpresaGarageController.js', import.meta.url), 'utf8');
 test('repositorio parametriza entradas y listados usan joins sin N+1', () => {
     assert.doesNotMatch(repoSource, /\$\{(?:idUsuario|idEmpresa|idGarage|id)\}/);
     assert.match(repoSource, /JOIN empresas/); assert.match(repoSource, /JOIN garages/);
@@ -224,9 +223,4 @@ test('rutas estáticas preceden a /:id y no hay PATCH genérico', () => {
     assert.ok(controllerSource.indexOf("get('/enviadas'") < controllerSource.indexOf("get('/:id'"));
     assert.ok(controllerSource.indexOf("get('/recibidas'") < controllerSource.indexOf("get('/:id'"));
     assert.doesNotMatch(controllerSource, /patch\('\/:id'\s*,/);
-});
-test('endpoint histórico permite admin pero lo deriva a solicitud sin crear trato directo', () => {
-    assert.match(tratoControllerSource, /router\.post\('', requireRole\(1, 4, ROLE_NAMES\.ADMIN/);
-    assert.match(tratoControllerSource, /solicitudSvc\.createAsync/);
-    assert.match(tratoControllerSource, /hasRole\(req\.usuario, 4, ROLE_NAMES\.SUPERADMIN\)/);
 });

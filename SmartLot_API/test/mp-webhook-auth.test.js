@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import express from 'express';
 import request from 'supertest';
+import errorHandler from '../src/middlewares/errorHandler.js';
 
 const secret = crypto.randomBytes(32).toString('hex');
 const state = { queries: [], providerCalls: [], events: new Map(), payments: new Map(), providerId: null,
@@ -56,7 +57,7 @@ const { default: router } = await import('../src/controllers/paymentController.j
 const app = express();
 app.use(express.json());
 app.use('/api/payments', router);
-app.use((err, req, res, next) => res.status(err.statusCode || 500).json({ error: err.message }));
+app.use(errorHandler);
 const path = '/api/payments/webhook';
 const body = () => ({ id: 'existing-event', type: 'payment', action: 'payment.updated', data: { id: '100' } });
 
@@ -112,13 +113,14 @@ test('SEG-08: sin secreto rechaza HTTP sin firma antes de SQL/proveedor', async 
   delete process.env.MP_WEBHOOK_SECRET;
   const response = await send({ sig: null, requestId: null });
   assert.equal(response.status, 503);
-  assert.deepEqual(response.body, { error: 'Webhook temporarily unavailable' });
+  assert.deepEqual(response.body, { error: true, message: 'Webhook no disponible temporalmente.', statusCode: 503 });
   noEffects();
 });
 
 test('SEG-08: firma de query 100 no autoriza procesar body 200', async () => {
   const response = await send({ payload: { ...body(), data: { id: '200' } } });
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 401);
+  assert.deepEqual(response.body, { error: true, message: 'Firma de webhook inválida.', statusCode: 401 });
   noEffects();
 });
 
@@ -140,33 +142,45 @@ test('SEG-08: configuración obligatoria también en producción, desarrollo, te
 test('SEG-08: firmas ausentes, incorrectas, truncadas o ambiguas no producen efectos', async () => {
   for (const sig of [null, '', 'ts', 'v1', 'ts=1,v1', 'ts=1,v1=ff', 'ts=no,v1=' + 'a'.repeat(64),
     'ts=1,v1=' + 'z'.repeat(64), 'ts=1,v1=' + '0'.repeat(64), `${signature()},ts=1`, `${signature()},${signature()}`]) {
-    assert.equal((await send({ sig })).status, 400, String(sig));
+    assert.equal((await send({ sig })).status, 401, String(sig));
     noEffects();
   }
-  assert.equal((await send({ requestId: null })).status, 400);
-  assert.equal((await send({ requestId: 'ambiguous;id:200' })).status, 400);
+  assert.equal((await send({ requestId: null })).status, 401);
+  assert.equal((await send({ requestId: 'ambiguous;id:200' })).status, 401);
   noEffects();
 });
 
-test('SEG-08: campos requeridos y tipos inválidos se rechazan con 400 sin tocar evento existente', async () => {
+test('SEG-08: id o tipo del evento inválidos se rechazan con 400 sin tocar evento existente', async () => {
   for (const payload of [
-    {}, [], { ...body(), id: undefined }, { ...body(), id: [] }, { ...body(), id: {} },
-    { ...body(), type: undefined }, { ...body(), type: [] }, { ...body(), data: undefined },
+    { ...body(), id: undefined }, { ...body(), id: [] }, { ...body(), id: {} },
+    { ...body(), type: undefined }, { ...body(), type: [] },
+  ]) {
+    const response = await send({ payload });
+    assert.equal(response.status, 400, JSON.stringify(payload));
+    assert.equal(response.body.message, 'Payload de webhook inválido.');
+    noEffects();
+  }
+});
+
+// data.id forma parte de lo firmado: si falta o no coincide con la URL, la firma no verifica.
+test('SEG-08: data.id ausente, ambiguo o contradictorio con la URL se rechaza como firma inválida', async () => {
+  for (const payload of [
+    {}, [], { ...body(), data: undefined },
     { ...body(), data: [] }, { ...body(), data: { id: undefined } },
     ...[[], {}, null, true, 1.5, -1, Number.MAX_SAFE_INTEGER + 1, '', ' 100', '100;id:200'].map(id => ({ ...body(), data: { id } })),
   ]) {
-    assert.equal((await send({ payload })).status, 400, JSON.stringify(payload));
+    assert.equal((await send({ payload })).status, 401, JSON.stringify(payload));
     noEffects();
   }
   for (const query of [{}, { 'data.id': ['100', '200'] }, { 'data.id': '' }, { 'data.id[x]': '100' }]) {
-    assert.equal((await send({ query })).status, 400, JSON.stringify(query));
+    assert.equal((await send({ query })).status, 401, JSON.stringify(query));
     noEffects();
   }
 });
 
 test('SEG-08: ID de notificación no sustituye a data.id aunque tenga firma válida', async () => {
   const response = await send({ payload: { id: '100', type: 'payment.updated' }, query: {} });
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 401);
   noEffects();
 });
 
@@ -197,7 +211,9 @@ for (const failure of ['failProvider', 'failPersistence']) {
   test(`formato oficial: ${failure} no devuelve éxito y permite reintento`, async () => {
     state[failure] = true;
     const failed = await send();
-    assert.equal(failed.status, failure === 'failProvider' ? 503 : 500);
+    // Un fallo del proveedor es un 502 propio: su status (aquí 503) no se reenvía.
+    assert.equal(failed.status, failure === 'failProvider' ? 502 : 500);
+    if (failure === 'failProvider') assert.equal(failed.body.code, 'MP_UPSTREAM_ERROR');
     assert.equal(state.payments.size, 0);
     assert.ok(state.events.get('existing-event').error);
     assert.ok(!state.trace.includes('success'));

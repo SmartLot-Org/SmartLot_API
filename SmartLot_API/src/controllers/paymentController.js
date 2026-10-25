@@ -13,17 +13,15 @@ import { executeManualRefund } from '../services/manualRefundService.js';
 import {
   getAuthorizedPayment,
   listAuthorizedPayments,
-  listWebhookEvents
+  listWebhookEvents,
+  verifyAuthorizedPayment,
+  verifyAuthorizedPaymentsByReference
 } from '../services/paymentReadService.js';
 import { readProviderRefundState } from '../services/paymentRefundState.js';
+import { throwError } from '../helpers/httpError.js';
+import { BAD_REQUEST, CONFLICT, FORBIDDEN, SERVICE_UNAVAILABLE, UNAUTHORIZED } from '../helpers/httpStatus.js';
 
 const router = Router();
-
-function throwError(message, statusCode) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  throw error;
-}
 
 async function savePaymentRecord(paymentData, idEmpresa = null, db = pool) {
   if (await syncEnterprisePayment(paymentData, db)) return null;
@@ -218,141 +216,106 @@ async function markWebhookProcessed(mpEventId, error = null) {
   await pool.query(query, [error, mpEventId]);
 }
 
-router.post('/preference', requireRole(1, 2, 4), async (req, res, next) => {
-  try {
-    let {
-      items,
+router.post('/preference', requireRole(1, 2, 4), async (req, res) => {
+  const { backUrls, idReserva } = req.body;
+
+  // Sin idReserva es un pago empresarial de consumos.
+  if (idReserva == null) {
+    return res.status(201).json(await createEnterprisePreference(req.usuario, req.body));
+  }
+  if (Number(req.usuario?.id_rol) !== 2) throwError('Solo empleados pueden pagar reservas propias.', FORBIDDEN);
+  if (!isValidId(String(idReserva))) throwError('idReserva inválido.', BAD_REQUEST);
+
+  // La reserva del empleado usa su importe persistido, nunca uno enviado por el cliente.
+  const expired = await pool.query(
+    `UPDATE reservas SET estado_reserva='expirada'
+      WHERE id=$1 AND estado_reserva='pendiente_pago' AND retencion_pago_hasta<=NOW()
+      RETURNING id`, [idReserva]
+  );
+
+  let reserva = null;
+  if (!expired.rowCount) {
+    reserva = (await pool.query(
+      `SELECT r.* FROM reservas r
+        WHERE r.id=$1 AND r.id_usuario=$2 AND r.responsable_pago='empleado'`,
+        [idReserva, req.usuario?.id]
+    )).rows[0];
+  }
+
+  if (!reserva) throwError('La reserva no existe, expiro o no pertenece al empleado.', FORBIDDEN);
+  if (reserva.estado_reserva !== 'pendiente_pago') throwError('La reserva no esta pendiente de pago.', CONFLICT);
+
+  const existing = (await pool.query(
+    `SELECT mp_preference_id FROM pagos
+      WHERE id_reserva=$1 AND mp_preference_id IS NOT NULL
+      ORDER BY id DESC LIMIT 1`, [idReserva]
+  )).rows[0];
+  if (existing) return res.status(200).json({ preferenceId: existing.mp_preference_id, reused: true, sandbox: isSandbox() });
+
+  const orderId = `reserva-${reserva.id}`;
+  const items = [{
+    title: `Reserva SmartLot #${reserva.id}`,
+    quantity: 1,
+    unit_price: Number(reserva.importe_estimado),
+    currency_id: 'ARS'
+  }];
+
+  const preference = await createPreference(items, orderId, backUrls, { id_reserva: reserva.id });
+
+  await pool.query(
+    `INSERT INTO pagos (id_orden_externa, mp_preference_id, monto, moneda, descripcion, id_empresa, metadata, id_reserva)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (mp_preference_id) DO NOTHING`,
+    [
       orderId,
-      backUrls,
-      idReserva
-    } = req.body;
+      preference.id,
+      reserva.importe_estimado,
+      'ARS',
+      `Reserva ${orderId}`,
+      req.usuario?.id_empresa || null,
+      JSON.stringify({ id_reserva: reserva.id }),
+      reserva.id
+    ]
+  );
 
-    let reserva = null;
-    if (idReserva == null) {
-      return res.status(201).json(await createEnterprisePreference(req.usuario, req.body));
-    }
-    if (Number(req.usuario?.id_rol) !== 2) throwError('Solo empleados pueden pagar reservas propias.', 403);
-
-    // La reserva del empleado tambien usa su importe persistido.
-    if (idReserva !== undefined && idReserva !== null) {
-      if (!isValidId(String(idReserva))) throwError('idReserva is required', 400);
-
-      const expired = await pool.query(
-        `UPDATE reservas SET estado_reserva='expirada'
-          WHERE id=$1 AND estado_reserva='pendiente_pago' AND retencion_pago_hasta<=NOW()
-          RETURNING id`, [idReserva]
-      );
-
-      if (!expired.rowCount) {
-        reserva = (await pool.query(
-          `SELECT r.* FROM reservas r
-            WHERE r.id=$1 AND r.id_usuario=$2 AND r.responsable_pago='empleado'`,
-            [idReserva, req.usuario?.id]
-        )).rows[0];
-      }
-
-      if (!reserva) throwError('La reserva no existe, expiro o no pertenece al empleado.', 403);
-      if (reserva.estado_reserva !== 'pendiente_pago') throwError('La reserva no esta pendiente de pago.', 409);
-
-      const existing = (await pool.query(
-        `SELECT mp_preference_id FROM pagos
-          WHERE id_reserva=$1 AND mp_preference_id IS NOT NULL
-          ORDER BY id DESC LIMIT 1`, [idReserva]
-      )).rows[0];
-      if (existing) return res.status(200).json({ preferenceId: existing.mp_preference_id, reused: true, sandbox: isSandbox() });
-
-      orderId = `reserva-${reserva.id}`;
-      items = [{
-        title: `Reserva SmartLot #${reserva.id}`,
-        quantity: 1,
-        unit_price: Number(reserva.importe_estimado),
-        currency_id: 'ARS'
-      }];
-    }
-
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      throwError('Items array is required', 400);
-    }
-
-    if (!orderId) {
-      throwError('orderId is required', 400);
-    }
-
-    const preference = await createPreference(
-      items,
-      orderId,
-      backUrls,
-      reserva ? { id_reserva: reserva.id } : {}
-    );
-
-    const metadataToStore = { id_reserva: reserva.id };
-    await pool.query(
-      `INSERT INTO pagos (id_orden_externa, mp_preference_id, monto, moneda, descripcion, id_empresa, metadata, id_reserva)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (mp_preference_id) DO NOTHING`,
-      [
-        orderId,
-        preference.id,
-        reserva.importe_estimado,
-        'ARS',
-        `Reserva ${orderId}`,
-        req.usuario?.id_empresa || null,
-        JSON.stringify({
-          ...metadataToStore,
-          ...(reserva ? { id_reserva: reserva.id } : {})
-        }),
-        reserva?.id || null
-      ]
-    );
-
-    const sandbox = isSandbox();
-    res.status(201).json({
-      preferenceId: preference.id,
-      initPoint: sandbox ? preference.sandbox_init_point : preference.init_point,
-      sandboxInitPoint: preference.sandbox_init_point,
-      sandbox
-    });
-  } catch (err) {
-    next(err);
-  }
+  const sandbox = isSandbox();
+  res.status(201).json({
+    preferenceId: preference.id,
+    initPoint: sandbox ? preference.sandbox_init_point : preference.init_point,
+    sandboxInitPoint: preference.sandbox_init_point,
+    sandbox
+  });
 });
 
-router.get('/webhook-events', requireRole(4), async (req, res, next) => {
-  try {
-    res.json(await listWebhookEvents(req.query));
-  } catch (err) {
-    next(err);
-  }
+router.get('/webhook-events', requireRole(4), async (req, res) => {
+  res.json(await listWebhookEvents(req.query));
 });
 
-router.get('/:paymentId', requireRole(1, 2, 4), async (req, res, next) => {
-  try {
-    res.json(await getAuthorizedPayment(req.usuario, req.params.paymentId, req.query));
-  } catch (err) {
-    if (err.statusCode === 404 || err.code === 'payment_not_found') {
-      return res.status(404).json({
-        error: true,
-        code: err.code || 'payment_not_found',
-        message: 'Pago no encontrado.',
-        statusCode: 404
-      });
-    }
-    next(err);
-  }
+// Acción: sincroniza con Mercado Pago los pagos de una referencia (escribe en `pagos`).
+router.post('/verificar', requireRole(1, 2, 4), async (req, res) => {
+  res.json(await verifyAuthorizedPaymentsByReference(req.usuario, req.body));
 });
 
-router.post('/webhook', async (req, res, next) => {
+// Lectura pura del estado local; la verificación contra Mercado Pago es POST /:paymentId/verificar.
+router.get('/:paymentId', requireRole(1, 2, 4), async (req, res) => {
+  res.json(await getAuthorizedPayment(req.usuario, req.params.paymentId));
+});
+
+// Acción: consulta el pago en Mercado Pago y sincroniza el registro local (escribe en `pagos`).
+router.post('/:paymentId/verificar', requireRole(1, 2, 4), async (req, res) => {
+  res.json(await verifyAuthorizedPayment(req.usuario, req.params.paymentId, req.body));
+});
+
+router.post('/webhook', async (req, res) => {
   // Fallar solo este endpoint; ninguna excepción de configuración habilita efectos.
   if (!process.env.MP_WEBHOOK_SECRET?.trim()) {
-    return res.status(503).json({ error: 'Webhook temporarily unavailable' });
+    throwError('Webhook no disponible temporalmente.', SERVICE_UNAVAILABLE);
   }
   let loggedEventId;
   try {
-    const isValid = verifySignature(req);
-
-    if (!isValid) {
+    if (!verifySignature(req)) {
       console.error('Invalid webhook signature');
-      return res.status(400).json({ error: 'Invalid signature' });
+      throwError('Firma de webhook inválida.', UNAUTHORIZED);
     }
 
     const { id: mpEventId, type: tipoEvento, action, data } = req.body || {};
@@ -360,7 +323,7 @@ router.post('/webhook', async (req, res, next) => {
       ? mpEventId.trim().length > 0
       : Number.isSafeInteger(mpEventId) && mpEventId > 0;
     if (!validEventId || typeof tipoEvento !== 'string' || !/^[a-z][a-z0-9_.-]*$/.test(tipoEvento)) {
-      return res.status(400).json({ error: 'Invalid webhook payload' });
+      throwError('Payload de webhook inválido.', BAD_REQUEST);
     }
     // Contrato oficial: type es el tópico; action distingue la operación.
     // Compatibilidad explícita con los antiguos type=payment.created/updated/refunded.
@@ -370,7 +333,7 @@ router.post('/webhook', async (req, res, next) => {
     if ((action !== undefined && (typeof action !== 'string' || !/^[a-z][a-z0-9_.-]*$/.test(action))) ||
         (tipoEvento === 'payment' && !paymentActions.includes(action)) ||
         (paymentActions.includes(tipoEvento) && action !== undefined && action !== tipoEvento)) {
-      return res.status(400).json({ error: 'Invalid webhook payload' });
+      throwError('Payload de webhook inválido.', BAD_REQUEST);
     }
     // verifySignature exige que data.id del body coincida con el ID firmado de query.
     const paymentId = String(data.id);
@@ -380,7 +343,7 @@ router.post('/webhook', async (req, res, next) => {
 
     if (accionEvento === 'payment.created' || accionEvento === 'payment.updated') {
       const payment = await getPayment(paymentId);
-      if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', 409);
+      if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', CONFLICT);
       if (await syncEnterprisePayment(payment)) {
         // Orden empresarial verificada por asociaciones locales.
       } else if (payment?.metadata?.id_reserva) {
@@ -393,7 +356,7 @@ router.post('/webhook', async (req, res, next) => {
       }
     } else if (accionEvento === 'payment.refunded') {
       const payment = await getPayment(paymentId);
-      if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', 409);
+      if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', CONFLICT);
       if (!await syncEnterprisePayment(payment)) {
         await updatePaymentStatus(paymentId, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
       }
@@ -403,37 +366,30 @@ router.post('/webhook', async (req, res, next) => {
 
     res.status(200).json({ received: true });
   } catch (err) {
+    // Se deja constancia del fallo en el evento ya registrado y se relanza el error original.
     if (loggedEventId !== undefined) {
       await markWebhookProcessed(loggedEventId, err.message).catch(() => {});
     }
-    next(err);
+    throw err;
   }
 });
 
-router.post('/:paymentId/refund', requireRole(4), async (req, res, next) => {
-  try {
-    const { paymentId } = req.params;
-    const body = req.body || {};
-    const { amount, motivo } = body;
-    const result = await executeManualRefund({
-      paymentId,
-      amount,
-      amountProvided: Object.prototype.hasOwnProperty.call(body, 'amount'),
-      motivo,
-      actorUserId: req.usuario.id
-    });
-    res.status(result.httpStatus).json(result.body);
-  } catch (err) {
-    next(err);
-  }
+router.post('/:paymentId/refund', requireRole(4), async (req, res) => {
+  const { paymentId } = req.params;
+  const body = req.body || {};
+  const { amount, motivo } = body;
+  const result = await executeManualRefund({
+    paymentId,
+    amount,
+    amountProvided: Object.prototype.hasOwnProperty.call(body, 'amount'),
+    motivo,
+    actorUserId: req.usuario.id
+  });
+  res.status(result.httpStatus).json(result.body);
 });
 
-router.get('/', requireRole(1, 2, 4), async (req, res, next) => {
-  try {
-    res.json(await listAuthorizedPayments(req.usuario, req.query));
-  } catch (err) {
-    next(err);
-  }
+router.get('/', requireRole(1, 2, 4), async (req, res) => {
+  res.json(await listAuthorizedPayments(req.usuario, req.query));
 });
 
 export default router;

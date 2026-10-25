@@ -56,22 +56,20 @@ export default class ConflictoRepository {
     }
 
     getAllAsync = async (superAdmin = false, requestingUser = null) => {
-        try {
-            const superAdminColumn = await getSuperAdminColumnAsync();
-            const superAdminExpression = superAdminColumn ? `COALESCE(c.${quoteIdentifier(superAdminColumn)}, false)` : 'false';
-            const tenant = getTenantCondition(requestingUser, 2, 'u');
-            const result = await pool.query(
-                `SELECT c.*
-                 FROM conflictos c
-                 INNER JOIN usuarios u ON u.id = c.id_usuario
-                 WHERE COALESCE(c."Borrado", false) = false
-                   AND ${superAdminExpression} = $1
-                   ${tenant.sql}
-                 ORDER BY c.id`,
-                [superAdmin, ...tenant.params]
-            );
-            return result.rows;
-        } catch (error) { console.error(error); return null; }
+        const superAdminColumn = await getSuperAdminColumnAsync();
+        const superAdminExpression = superAdminColumn ? `COALESCE(c.${quoteIdentifier(superAdminColumn)}, false)` : 'false';
+        const tenant = getTenantCondition(requestingUser, 2, 'u');
+        const result = await pool.query(
+            `SELECT c.*
+             FROM conflictos c
+             INNER JOIN usuarios u ON u.id = c.id_usuario
+             WHERE COALESCE(c."Borrado", false) = false
+               AND ${superAdminExpression} = $1
+               ${tenant.sql}
+             ORDER BY c.id`,
+            [superAdmin, ...tenant.params]
+        );
+        return result.rows;
     }
 
     getDeletedByUserAsync = async (deletedBy, superAdmin = false, requestingUser = null) => {
@@ -92,6 +90,7 @@ export default class ConflictoRepository {
             );
             return result.rows;
         } catch (error) {
+            // Compatibilidad con bases sin las columnas DeleteBy/DeleteAt (42703): se reintenta sin ellas.
             if (error.code === '42703') {
                 const superAdminColumn = await getSuperAdminColumnAsync();
                 const superAdminExpression = superAdminColumn ? `COALESCE(c.${quoteIdentifier(superAdminColumn)}, false)` : 'false';
@@ -109,115 +108,106 @@ export default class ConflictoRepository {
                 return result.rows;
             }
 
-            console.error(error);
-            return null;
+            throw error;
         }
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 2, 'u');
-            const result = await pool.query(
-                `SELECT c.*
-                 FROM conflictos c
-                 INNER JOIN usuarios u ON u.id = c.id_usuario
-                 WHERE c.id = $1
-                   AND COALESCE(c."Borrado", false) = false
-                   ${tenant.sql}`,
-                [id, ...tenant.params]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 2, 'u');
+        const result = await pool.query(
+            `SELECT c.*
+             FROM conflictos c
+             INNER JOIN usuarios u ON u.id = c.id_usuario
+             WHERE c.id = $1
+               AND COALESCE(c."Borrado", false) = false
+               ${tenant.sql}`,
+            [id, ...tenant.params]
+        );
+        return result.rows[0] ?? null;
     }
 
     countActiveByUserAsync = async (userId) => {
-        try {
-            const result = await pool.query(
-                `SELECT COUNT(*)::int AS count
-                 FROM conflictos
-                 WHERE id_usuario = $1
-                   AND COALESCE("Borrado", false) = false
-                   AND estado != 'Resuelto'`,
-                [userId]
-            );
-            return result.rows[0]?.count ?? 0;
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT COUNT(*)::int AS count
+             FROM conflictos
+             WHERE id_usuario = $1
+               AND COALESCE("Borrado", false) = false
+               AND estado != 'Resuelto'`,
+            [userId]
+        );
+        return result.rows[0]?.count ?? 0;
     }
 
     createAsync = async (entity) => {
-        try {
-            const superAdminColumn = await getSuperAdminColumnAsync();
-            if (!superAdminColumn) {
-                const result = await pool.query(
-                    `INSERT INTO conflictos (id_usuario, descripcion, prioridad, estado)
-                     VALUES ($1, $2, $3, $4) RETURNING *`,
-                    [entity.id_usuario, entity.descripcion, entity.prioridad, entity.estado || 'Pendiente']
-                );
-                return result.rows[0];
-            }
-
+        const superAdminColumn = await getSuperAdminColumnAsync();
+        if (!superAdminColumn) {
             const result = await pool.query(
-                `INSERT INTO conflictos (id_usuario, descripcion, prioridad, estado, ${quoteIdentifier(superAdminColumn)})
-                 VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-                [
-                    entity.id_usuario,
-                    entity.descripcion,
-                    entity.prioridad,
-                    entity.estado || 'Pendiente',
-                    entity.SuperAdmin === true
-                ]
+                `INSERT INTO conflictos (id_usuario, descripcion, prioridad, estado)
+                 VALUES ($1, $2, $3, $4) RETURNING *`,
+                [entity.id_usuario, entity.descripcion, entity.prioridad, entity.estado || 'Pendiente']
             );
             return result.rows[0];
-        } catch (error) { console.error(error); return null; }
+        }
+
+        const result = await pool.query(
+            `INSERT INTO conflictos (id_usuario, descripcion, prioridad, estado, ${quoteIdentifier(superAdminColumn)})
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [
+                entity.id_usuario,
+                entity.descripcion,
+                entity.prioridad,
+                entity.estado || 'Pendiente',
+                entity.SuperAdmin === true
+            ]
+        );
+        return result.rows[0];
     }
 
     updateAsync = async (id, entity, requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 6, 'u');
-            const superAdminColumn = await getSuperAdminColumnAsync();
-            if (!superAdminColumn) {
-                const result = await pool.query(
-                    `UPDATE conflictos c
-                     SET id_usuario = $1,
-                         descripcion = $2,
-                         prioridad = $3,
-                         estado = $4
-                     FROM usuarios u
-                     WHERE c.id = $5
-                       AND u.id = c.id_usuario
-                       AND COALESCE(c."Borrado", false) = false
-                       ${tenant.sql}
-                     RETURNING c.*`,
-                    [entity.id_usuario, entity.descripcion, entity.prioridad, entity.estado, id, ...tenant.params]
-                );
-                return result.rows[0] ?? null;
-            }
-
+        const tenant = getTenantCondition(requestingUser, 6, 'u');
+        const superAdminColumn = await getSuperAdminColumnAsync();
+        if (!superAdminColumn) {
             const result = await pool.query(
                 `UPDATE conflictos c
                  SET id_usuario = $1,
                      descripcion = $2,
                      prioridad = $3,
-                     estado = $4,
-                     ${quoteIdentifier(superAdminColumn)} = $5
+                     estado = $4
                  FROM usuarios u
-                 WHERE c.id = $6
+                 WHERE c.id = $5
                    AND u.id = c.id_usuario
                    AND COALESCE(c."Borrado", false) = false
                    ${tenant.sql}
                  RETURNING c.*`,
-                [
-                    entity.id_usuario,
-                    entity.descripcion,
-                    entity.prioridad,
-                    entity.estado,
-                    entity.SuperAdmin === true,
-                    id,
-                    ...tenant.params
-                ]
+                [entity.id_usuario, entity.descripcion, entity.prioridad, entity.estado, id, ...tenant.params]
             );
             return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        }
+
+        const result = await pool.query(
+            `UPDATE conflictos c
+             SET id_usuario = $1,
+                 descripcion = $2,
+                 prioridad = $3,
+                 estado = $4,
+                 ${quoteIdentifier(superAdminColumn)} = $5
+             FROM usuarios u
+             WHERE c.id = $6
+               AND u.id = c.id_usuario
+               AND COALESCE(c."Borrado", false) = false
+               ${tenant.sql}
+             RETURNING c.*`,
+            [
+                entity.id_usuario,
+                entity.descripcion,
+                entity.prioridad,
+                entity.estado,
+                entity.SuperAdmin === true,
+                id,
+                ...tenant.params
+            ]
+        );
+        return result.rows[0] ?? null;
     }
 
     deleteAsync = async (id, deletedBy = null, requestingUser = null) => {
@@ -237,6 +227,7 @@ export default class ConflictoRepository {
             );
             return result.rowCount > 0;
         } catch (error) {
+            // Compatibilidad con bases sin las columnas DeleteBy/DeleteAt (42703): se reintenta sin ellas.
             if (error.code === '42703') {
                 const tenant = getTenantCondition(requestingUser, 2, 'u');
                 const result = await pool.query(
@@ -252,8 +243,7 @@ export default class ConflictoRepository {
                 return result.rowCount > 0;
             }
 
-            console.error(error);
-            return false;
+            throw error;
         }
     }
 
@@ -276,6 +266,7 @@ export default class ConflictoRepository {
             );
             return result.rows[0] ?? null;
         } catch (error) {
+            // Compatibilidad con bases sin las columnas DeleteBy/DeleteAt (42703): se reintenta sin ellas.
             if (error.code === '42703') {
                 const tenant = getTenantCondition(requestingUser, 2, 'u');
                 const result = await pool.query(
@@ -292,8 +283,7 @@ export default class ConflictoRepository {
                 return result.rows[0] ?? null;
             }
 
-            console.error(error);
-            return null;
+            throw error;
         }
     }
 }

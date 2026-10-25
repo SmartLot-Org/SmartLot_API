@@ -1,6 +1,8 @@
 // notificacionService.js
 import NotificacionRepository from '../repos/NotificacionRepository.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
+import { throwError } from '../helpers/httpError.js';
+import { NOT_FOUND } from '../helpers/httpStatus.js';
 
 export default class NotificacionService {
     constructor() {
@@ -19,7 +21,7 @@ export default class NotificacionService {
 
     marcarComoLeidaAsync = async (id, id_usuario) => {
         const notificacion = await this.repo.marcarComoLeidaAsync(id, id_usuario);
-        if (!notificacion) throw new Error('Notificación no encontrada o no pertenece al usuario.');
+        if (!notificacion) throwError('Notificación no encontrada o no pertenece al usuario.', NOT_FOUND);
         return notificacion;
     }
 
@@ -29,7 +31,7 @@ export default class NotificacionService {
 
     eliminarAsync = async (id, id_usuario) => {
         const ok = await this.repo.eliminarAsync(id, id_usuario);
-        if (!ok) throw new Error('Notificación no encontrada o no pertenece al usuario.');
+        if (!ok) throwError('Notificación no encontrada o no pertenece al usuario.', NOT_FOUND);
         return ok;
     }
 

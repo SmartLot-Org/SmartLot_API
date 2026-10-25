@@ -14,7 +14,7 @@
 import { hasRole } from '../helpers/roles.js';
 
 const requireRole = (...rolesPermitidos) => {
-    return (req, res, next) => {
+    const middleware = (req, res, next) => {
         if (!req.usuario) {
             return res.status(401).json({ error: true, message: 'No autenticado.', statusCode: 401 });
         }
@@ -27,6 +27,9 @@ const requireRole = (...rolesPermitidos) => {
 
         next();
     };
+    // Metadato para el inventario de endpoints (scripts/generate-api-inventory.mjs); no afecta la autorización.
+    middleware.requiredRoles = rolesPermitidos;
+    return middleware;
 };
 
 /**
@@ -36,13 +39,13 @@ const requireAdmin = requireRole(1);
 
 /**
  * Permite el paso si el usuario tiene uno de los roles indicados O es el propio usuario solicitando el cambio.
- * Uso: router.patch('/:id/contraseña', authMiddleware, requireRoleOrSelf(1, 4), handler)
+ * Uso: router.patch('/:id/contrasenia', authMiddleware, requireRoleOrSelf(1, 4), handler)
  *
  * Convencion: el usuario autenticado puede cambiar su propia contraseña (coincide id),
  * o bien tener rol 1 (admin) o 4 (superadmin/smartlot) para cambiar cualquier usuario.
  */
 const requireRoleOrSelf = (...rolesPermitidos) => {
-    return (req, res, next) => {
+    const middleware = (req, res, next) => {
         if (!req.usuario) {
             return res.status(401).json({ error: true, message: 'No autenticado.', statusCode: 401 });
         }
@@ -59,6 +62,9 @@ const requireRoleOrSelf = (...rolesPermitidos) => {
             error: true, message: 'No tiene permisos para realizar esta accion.', statusCode: 403
         });
     };
+    middleware.requiredRoles = rolesPermitidos;
+    middleware.allowsSelf = true;
+    return middleware;
 };
 
 export { requireRole, requireAdmin, requireRoleOrSelf };

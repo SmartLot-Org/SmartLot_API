@@ -33,12 +33,7 @@ export default class ConflictoService {
         const userRole = Number(requestingUser?.id_rol);
         if (userRole === 2) {
             const count = await this.repo.countActiveByUserAsync(entity.id_usuario);
-            if (count === null) {
-                const error = new Error('Error interno al verificar el limite de conflictos.');
-                error.statusCode = 500;
-                throw error;
-            }
-            if (count >= MAX_CONFLICTOS_ACTIVOS_EMPLEADO) {
+            if (count >=MAX_CONFLICTOS_ACTIVOS_EMPLEADO) {
                 const error = new Error(`Ya alcanzaste el limite de ${MAX_CONFLICTOS_ACTIVOS_EMPLEADO} reportes activos. Resolve los pendientes antes de crear uno nuevo.`);
                 error.statusCode = 400;
                 throw error;

@@ -12,12 +12,14 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
-import { authorizeWrite, authorizeUserEdit, authorizeUserEditDestination, authorizeUserLifecycle, writeError } from '../helpers/writeAuthorization.js';
+import { authorizeWrite, authorizeUserEdit, authorizeUserEditDestination, authorizeUserLifecycle } from '../helpers/writeAuthorization.js';
 import { verifyLogoutCredential } from '../helpers/logoutCredential.js';
+import { httpError } from '../helpers/httpError.js';
 
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 // Una sola preparación por proceso, con el costo configurado. Nunca autoriza una sesión.
 const LOGIN_DUMMY_HASH = bcrypt.hash(randomBytes(32).toString('hex'), BCRYPT_ROUNDS);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const usableLoginHash = value => typeof value === 'string' &&
     /^\$2[ab]\$(?:0[4-9]|[12]\d|3[01])\$[./A-Za-z0-9]{53}$/.test(value);
 
@@ -59,7 +61,7 @@ export default class UsuarioService {
     getAuditAsync = async () => await this.repo.getAuditAsync();
 
     loginAsync = async (credentials) => {
-        const usuario = await this.repo.getByEmailAsync(credentials.email, { throwOnError: true });
+        const usuario = await this.repo.getByEmailAsync(credentials.email);
         const hasRealHash = usableLoginHash(usuario?.contraseña);
         const coincide = await bcrypt.compare(
             credentials.contraseña,
@@ -105,8 +107,7 @@ export default class UsuarioService {
             usuario.id,
             usuario.token_version,
             refreshToken,
-            expiresAt,
-            { throwOnError: true }
+            expiresAt
         );
         if (!sessionId) {
             const error = new Error('No se pudo crear la sesión.');
@@ -124,7 +125,9 @@ export default class UsuarioService {
     }
 
     refreshTokenAsync = async (session_id) => {
-        const session = await this.repo.getSessionAsync(session_id);
+        // El id viaja en una cookie que el cliente puede alterar: uno mal formado es
+        // una sesión inexistente (401), no un error de la base.
+        const session = UUID_RE.test(String(session_id)) ? await this.repo.getSessionAsync(session_id) : null;
         if (!session) {
             const error = new Error('Sesion invalida o expirada.');
             error.statusCode = 401;
@@ -209,11 +212,7 @@ export default class UsuarioService {
 
     revocarRefreshTokensAsync = async (id) => {
         const version = await this.repo.incrementTokenVersionAsync(id);
-        if (version === null) {
-            const error = new Error('Error al revocar tokens del usuario.');
-            error.statusCode = 500;
-            throw error;
-        }
+        if (version === null) throw httpError('Usuario no encontrado.', 404);
         await this.repo.deleteUserSessionsAsync(id);
         return version;
     }
@@ -242,7 +241,6 @@ export default class UsuarioService {
             throw error;
         }
         const usuarios = await this.usuarioGarageService.getUsuariosByGarageIdAsync(id_garage, requestingUser);
-        if (!Array.isArray(usuarios)) return usuarios;
         return usuarios.map(({ contraseña, ...usuario }) => usuario);
     }
 
@@ -341,7 +339,7 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
             // El estado tiene autorizacion y efectos transaccionales propios. Un
             // formulario completo puede reenviar el valor actual, pero no cambiarlo.
             if (entity.activo !== undefined && entity.activo !== current.activo) {
-                throw writeError('Para cambiar el estado utilice PATCH /api/usuario/:id/estado.', 400);
+                throw httpError('Para cambiar el estado utilice PATCH /api/usuario/:id/estado.', 400);
             }
 
             // Un garagista nunca depende de empresa ni sede: si el usuario ya lo es,
@@ -383,7 +381,7 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
     }
 
     updateEstadoAsync = async (id, activo, requestingUser = null) => {
-        if (typeof activo !== 'boolean') throw writeError('El estado debe ser booleano.', 400);
+        if (typeof activo !== 'boolean') throw httpError('El estado debe ser booleano.', 400);
         return this._changeLifecycleAsync(id, requestingUser, false, activo);
     }
 
@@ -394,7 +392,7 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
             await this._aplicarReglasDeActualizacion({}, requestingUser, target, client);
             const hash = await bcrypt.hash(contraseña, BCRYPT_ROUNDS);
             const updated = await this.repo.updateContraseñaAsync(id, hash, scope, client);
-            if (!updated) throw writeError('El usuario cambio durante la operacion.', 409);
+            if (!updated) throw httpError('El usuario cambio durante la operacion.', 409);
             await this.repo.revokeLifecycleSessionsAsync(id, client);
             return updated;
         });
@@ -423,14 +421,14 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
             await client.query('BEGIN');
             // El alta de reservas tambien bloquea este usuario antes de insertar.
             const target = await this.repo.getForLifecycleAsync(id, scope, client);
-            if (!target) throw writeError('Usuario no encontrado.', 404);
+            if (!target) throw httpError('Usuario no encontrado.', 404);
             authorizeUserLifecycle(scope, target);
             if (deleting || !activo) {
                 await this.repo.validateLifecycleReservationsAsync(id, deleting, client);
             }
             const result = deleting ? await this.repo.deleteAsync(id, scope, client) :
                 await this.repo.updateEstadoAsync(id, activo, scope, client);
-            if (!result) throw writeError('El usuario cambio durante la operacion.', 409);
+            if (!result) throw httpError('El usuario cambio durante la operacion.', 409);
             await this.repo.revokeLifecycleSessionsAsync(id, client);
             await client.query('COMMIT');
             return result;
@@ -504,10 +502,10 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         try {
             await client.query('BEGIN');
             const current = await this.repo.getForEditAsync(id, scope, client);
-            if (!current) throw writeError('Usuario no encontrado.', 404);
+            if (!current) throw httpError('Usuario no encontrado.', 404);
             if (Number(actor.id_rol) === 1) authorizeUserLifecycle(scope, current);
             const result = await operation(current, scope, client);
-            if (!result) throw writeError('El usuario cambio durante la operacion.', 409);
+            if (!result) throw httpError('El usuario cambio durante la operacion.', 409);
             await client.query('COMMIT');
             return result;
         } catch (error) {
@@ -549,11 +547,11 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
 
         if (!esPropio && esAdmin && !esSmartlot) {
             if (entity.id_empresa !== undefined && Number(entity.id_empresa) !== Number(requestingUser.id_empresa)) {
-                throw writeError('La empresa de destino no esta autorizada.', 403);
+                throw httpError('La empresa de destino no esta autorizada.', 403);
             }
             if (requestingUser.id_sede != null && entity.id_sede !== undefined &&
                 Number(entity.id_sede) !== Number(requestingUser.id_sede)) {
-                throw writeError('La sede de destino no esta autorizada.', 403);
+                throw httpError('La sede de destino no esta autorizada.', 403);
             }
             delete entity.id_empresa;
         }

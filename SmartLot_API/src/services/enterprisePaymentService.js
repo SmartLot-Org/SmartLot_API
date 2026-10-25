@@ -4,26 +4,27 @@ import * as mp from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
 import { readProviderRefundState } from './paymentRefundState.js';
 import { decideEnterpriseObservation } from './enterprisePaymentObservation.js';
+import { throwError } from '../helpers/httpError.js';
+import { CONFLICT } from '../helpers/httpStatus.js';
 
-const fail = (message, statusCode = 409) => { throw Object.assign(new Error(message), { statusCode }); };
 export function cents(value) {
   const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(value));
-  if (!m) fail('Importe monetario invalido.');
+  if (!m) throwError('Importe monetario invalido.', CONFLICT);
   const result = BigInt(m[1]) * 100n + BigInt((m[2] || '').padEnd(2, '0') || '0');
-  if (result > 99999999999n) fail('Importe fuera de rango.');
+  if (result > 99999999999n) throwError('Importe fuera de rango.', CONFLICT);
   return result;
 }
 const decimal = (value) => `${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
 const validId = (value) => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value));
 
 export async function createEnterprisePreference(user, body = {}) {
-  if (![1, 4].includes(Number(user?.id_rol))) fail('Rol no autorizado para pagos empresariales.', 403);
+  if (![1, 4].includes(Number(user?.id_rol))) throwError('Rol no autorizado para pagos empresariales.', 403);
   const company = Number(Number(user.id_rol) === 4 ? body.idEmpresa : user.id_empresa);
   const site = user.id_sede ? Number(user.id_sede) : (body.idSede == null ? null : Number(body.idSede));
-  if (!validId(company) || (site !== null && !validId(site))) fail('Contexto empresarial invalido.', 403);
-  if (user.id_sede && body.idSede != null && Number(body.idSede) !== site) fail('Sede no autorizada.', 403);
+  if (!validId(company) || (site !== null && !validId(site))) throwError('Contexto empresarial invalido.', 403);
+  if (user.id_sede && body.idSede != null && Number(body.idSede) !== site) throwError('Sede no autorizada.', 403);
   if (!Array.isArray(body.consumosIds) || !body.consumosIds.length || body.consumosIds.length > 1000 ||
-      body.consumosIds.some(id => !validId(id))) fail('Seleccione consumos validos (maximo 1000).', 400);
+      body.consumosIds.some(id => !validId(id))) throwError('Seleccione consumos validos (maximo 1000).', 400);
   const ids = [...new Set(body.consumosIds.map(String))];
   const client = await pool.connect();
   let reference;
@@ -36,19 +37,19 @@ export async function createEnterprisePreference(user, body = {}) {
        WHERE c.id=ANY($1::bigint[]) AND c.id_empresa=$2 AND s.id_empresa=$2
          AND ($3::integer IS NULL OR c.id_sede=$3) AND c.responsable_pago='empresa'
        ORDER BY c.id FOR UPDATE OF c`, [ids, company, site])).rows;
-    if (rows.length !== ids.length) fail('La seleccion contiene consumos inexistentes o no autorizados.', 403);
-    if (body.idGarage != null && rows.some(r => Number(r.id_garage) !== Number(body.idGarage))) fail('Garage incompatible.', 400);
-    if (body.periodo != null && (!/^\d{4}-(0[1-9]|1[0-2])$/.test(body.periodo) || rows.some(r => new Date(r.fecha_inicio).toISOString().slice(0, 7) !== body.periodo))) fail('Periodo incompatible.', 400);
+    if (rows.length !== ids.length) throwError('La seleccion contiene consumos inexistentes o no autorizados.', 403);
+    if (body.idGarage != null && rows.some(r => Number(r.id_garage) !== Number(body.idGarage))) throwError('Garage incompatible.', 400);
+    if (body.periodo != null && (!/^\d{4}-(0[1-9]|1[0-2])$/.test(body.periodo) || rows.some(r => new Date(r.fecha_inicio).toISOString().slice(0, 7) !== body.periodo))) throwError('Periodo incompatible.', 400);
     const claims = (await client.query(
       `SELECT ec.consumption_id, eo.settled, p.mp_payment_status
        FROM enterprise_payment_consumptions ec JOIN enterprise_payment_orders eo USING(reference)
        LEFT JOIN pagos p ON p.id_orden_externa=eo.reference AND p.mp_preference_id=eo.preference_id AND p.mp_payment_id=eo.accepted_payment_id
        WHERE ec.consumption_id=ANY($1::bigint[])`, [ids])).rows;
     const paid = new Set(claims.filter(c => c.settled && c.mp_payment_status === 'approved').map(c => String(c.consumption_id)));
-    if (claims.some(c => !paid.has(String(c.consumption_id)))) fail('Hay consumos con una orden vigente o pendiente de regularizacion.');
+    if (claims.some(c => !paid.has(String(c.consumption_id)))) throwError('Hay consumos con una orden vigente o pendiente de regularizacion.', CONFLICT);
     selected = rows.filter(r => !paid.has(String(r.id)) && cents(r.importe_generado) > 0n);
     total = selected.reduce((sum, r) => sum + cents(r.importe_generado), 0n);
-    if (!total) fail('No hay saldo pendiente para cobrar.');
+    if (!total) throwError('No hay saldo pendiente para cobrar.', CONFLICT);
     cents(decimal(total));
     reference = `EMP-${randomUUID()}`;
     await client.query(`INSERT INTO enterprise_payment_orders(reference,id_empresa,id_sede,expected_amount,currency)
@@ -59,7 +60,7 @@ export async function createEnterprisePreference(user, body = {}) {
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
-    if (error.code === '23505') fail('Los consumos ya tienen una orden de pago.');
+    if (error.code === '23505') throwError('Los consumos ya tienen una orden de pago.', CONFLICT);
     throw error;
   } finally { client.release(); }
   // La orden y sus claims ya existen: un timeout nunca habilita otro checkout.
@@ -90,7 +91,7 @@ export async function syncEnterprisePayment(payment, db = pool) {
     WHERE reference=$1 OR payment_id=$2 OR preference_id=$3 ORDER BY reference FOR UPDATE OF eo`,
   [payment.external_reference || null, String(payment.id), payment.preference_id || null])).rows;
   if (!orders.length) return false;
-  if (orders.length !== 1) fail('Correlacion empresarial ambigua.');
+  if (orders.length !== 1) throwError('Correlacion empresarial ambigua.', CONFLICT);
   if (db === pool) {
     const client = await pool.connect();
     try {
@@ -110,7 +111,7 @@ export async function syncEnterprisePayment(payment, db = pool) {
   if (!correlated) return true;
 
   const priorAttempt = (await db.query('SELECT * FROM enterprise_payment_attempts WHERE payment_id=$1', [paymentId])).rows[0];
-  if (priorAttempt && priorAttempt.reference !== order.reference) fail('El intento pertenece a otra orden.');
+  if (priorAttempt && priorAttempt.reference !== order.reference) throwError('El intento pertenece a otra orden.', CONFLICT);
   const refunds = readProviderRefundState(payment);
   let amountMatches = false;
   try { amountMatches = cents(payment.transaction_amount) === cents(order.expected_amount); } catch { /* falla cerrado */ }
@@ -155,7 +156,7 @@ export async function syncEnterprisePayment(payment, db = pool) {
       reversal_snapshot=COALESCE(enterprise_payment_attempts.reversal_snapshot,EXCLUDED.reversal_snapshot), verified_at=NOW()
     WHERE enterprise_payment_attempts.reference=EXCLUDED.reference RETURNING payment_id`,
   [paymentId, order.reference, JSON.stringify(payment), eligible ? JSON.stringify(payment) : null, reversed ? JSON.stringify(payment) : null]);
-  if (recorded.rows.length !== 1) fail('El intento cambio de orden durante la verificacion.');
+  if (recorded.rows.length !== 1) throwError('El intento cambio de orden durante la verificacion.', CONFLICT);
 
   if (order.accepted_payment_id && paymentId !== order.accepted_payment_id) {
     if (payment.status === 'approved' && refunds.known && refunds.valid && refunds.classification === 'none') await db.query(
@@ -176,6 +177,6 @@ export async function syncEnterprisePayment(payment, db = pool) {
     mp_payment_type=$3,fecha_actualizacion=NOW(),metadata=metadata || jsonb_build_object('_mp_payment_summary',$4::jsonb)
     WHERE id_orden_externa=$5 AND mp_preference_id=$6 RETURNING id`,
   [paymentId, status, payment.payment_type_id || null, JSON.stringify(payment), order.reference, order.preference_id]);
-  if (updated.rows.length !== 1) fail('La fila local de la orden es inexistente o ambigua.');
+  if (updated.rows.length !== 1) throwError('La fila local de la orden es inexistente o ambigua.', CONFLICT);
   return true;
 }

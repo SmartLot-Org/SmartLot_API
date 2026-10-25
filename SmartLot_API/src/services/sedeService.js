@@ -1,7 +1,8 @@
 // sedeService.js
 import SedeRepository from '../repositories/sedeRepository.js';
 import pool from '../database/db.js';
-import { authorizeWrite, authorizeSiteCompany, writeError } from '../helpers/writeAuthorization.js';
+import { authorizeWrite, authorizeSiteCompany } from '../helpers/writeAuthorization.js';
+import { httpError } from '../helpers/httpError.js';
 
 export default class SedeService {
     constructor() {
@@ -27,7 +28,7 @@ export default class SedeService {
         const scope = authorizeWrite(actor);
         return this._writeTransaction(async client => {
             const current = await this.repo.getForWriteAsync(id, scope, client);
-            if (!current) throw writeError('Sede no encontrada.', 404);
+            if (!current) throw httpError('Sede no encontrada.', 404);
             if (entity.id_empresa !== undefined) {
                 authorizeSiteCompany(scope, entity.id_empresa);
                 await this.repo.validateCompanyAsync(entity.id_empresa, client);
@@ -39,7 +40,7 @@ export default class SedeService {
     deleteAsync = async (id, actor) => {
         const scope = authorizeWrite(actor);
         return this._writeTransaction(async client => {
-            if (!await this.repo.getForWriteAsync(id, scope, client)) throw writeError('Sede no encontrada.', 404);
+            if (!await this.repo.getForWriteAsync(id, scope, client)) throw httpError('Sede no encontrada.', 404);
             return this.repo.deleteAsync(id, scope, client);
         });
     };

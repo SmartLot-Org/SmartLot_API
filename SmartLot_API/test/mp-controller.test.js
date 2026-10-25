@@ -63,10 +63,12 @@ mock.module('../src/database/db.js', {
 });
 
 const { default: controller } = await import('../src/controllers/paymentController.js');
+const { default: errorHandler } = await import('../src/middlewares/errorHandler.js');
 
 const app = express();
 app.use(express.json());
 app.use(controller);
+app.use(errorHandler);
 
 test.beforeEach(() => {
   state.serviceCalls.length = 0;
@@ -98,13 +100,14 @@ test('POST /webhook con firma valida responde 200 y registra evento', async () =
   assert.ok(findQuery('ON CONFLICT (mp_payment_id) DO UPDATE'));
 });
 
-test('POST /webhook con firma invalida -> 400 sin efectos', async () => {
+test('POST /webhook con firma invalida -> 401 con el payload estandar y sin efectos', async () => {
   state.webhookValid = false;
   const res = await request(app)
     .post('/webhook')
     .send({ id: 'evt-2', type: 'payment.updated', data: { id: 'PAY-123' } });
 
-  assert.equal(res.status, 400);
+  assert.equal(res.status, 401);
+  assert.deepEqual(res.body, { error: true, message: 'Firma de webhook inválida.', statusCode: 401 });
   assert.equal(state.queries.length, 0);
 });
 

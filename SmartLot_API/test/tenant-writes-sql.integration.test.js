@@ -127,7 +127,7 @@ for (const body of [{ nombre: 'Intruso' }, { email: 'intruso@test.test' }, { id_
     assert.deepEqual(await snapshot(), before);
   });
 }
-for (const alias of ['contrasenia', 'contrase%C3%B1a']) {
+for (const alias of ['contrasenia']) {
   for (const [actor, target] of [[2, 8], [1, 9]]) test(`clave ${alias}: actor ${actor} no cambia usuario ${target} fuera de alcance`, async () => {
     const before = await snapshot();
     const res = await call('patch', `/usuarios/${target}/${alias}`, actor, { contraseña: 'Segura12!!' });
@@ -300,30 +300,32 @@ test('sede: admin limitado no crea otra sede', async () => {
   assert.equal((await call('post', '/sedes', 2, { nombre: 'Nueva', id_empresa: 10 })).status, 403);
 });
 for (const [method, path, body] of [
-  ['put', '/sedes/201', { nombre: 'Intrusa' }], ['delete', '/sedes/201', {}],
-  ['put', '/sedes/201', { id_empresa: 10 }],
+  ['patch', '/sedes/201', { nombre: 'Intrusa' }], ['delete', '/sedes/201', {}],
+  ['patch', '/sedes/201', { id_empresa: 10 }],
+  ['put', '/sedes/201', { nombre: 'Intrusa', ubicacion: null }],
 ]) test(`sede: escritura ajena ${method} ${JSON.stringify(body)}`, async () => {
   const before = await snapshot();
   assert.equal((await call(method, path, 1, body)).status, 404);
   assert.deepEqual(await snapshot(), before);
 });
-for (const method of ['put', 'delete']) test(`sede: admin sede no ${method} otra de la misma empresa`, async () => {
+for (const method of ['put', 'patch', 'delete']) test(`sede: admin sede no ${method} otra de la misma empresa`, async () => {
   const before = await snapshot();
-  assert.equal((await call(method, '/sedes/102', 2, { nombre: 'Intrusa' })).status, 404);
+  assert.equal((await call(method, '/sedes/102', 2, { nombre: 'Intrusa', ubicacion: null })).status, 404);
   assert.deepEqual(await snapshot(), before);
 });
 test('sede: editar nombre preserva campos y rechaza transferencia', async () => {
   const before = (await db.query('SELECT * FROM sedes WHERE id=101')).rows[0];
-  const res = await call('put', '/sedes/101', 2, { nombre: 'Nuevo nombre' });
+  const res = await call('patch', '/sedes/101', 2, { nombre: 'Nuevo nombre' });
   assert.equal(res.status, 200, res.text);
   assert.deepEqual(res.body, { ...before, nombre: 'Nuevo nombre' });
-  assert.equal((await call('put', '/sedes/101', 1, { id_empresa: 20 })).status, 403);
+  assert.equal((await call('patch', '/sedes/101', 1, { id_empresa: 20 })).status, 403);
+  assert.equal((await call('put', '/sedes/101', 1, { nombre: 'Nuevo nombre', ubicacion: null, id_empresa: 20 })).status, 403);
 });
 test('sede: superadmin valida destino, crea, transfiere y elimina globalmente', async () => {
   assert.equal((await call('post', '/sedes', 4, { nombre: 'Nueva' })).status, 400);
   assert.equal((await call('post', '/sedes', 4, { nombre: 'Nueva', id_empresa: 999 })).status, 400);
   assert.equal((await call('post', '/sedes', 4, { nombre: 'Nueva', id_empresa: 20 })).status, 201);
-  assert.equal((await call('put', '/sedes/201', 4, { id_empresa: 10 })).status, 200);
+  assert.equal((await call('patch', '/sedes/201', 4, { id_empresa: 10 })).status, 200);
   assert.equal((await call('delete', '/sedes/201', 4)).status, 200);
 });
 
@@ -410,7 +412,7 @@ for (const [suffix, patch, code] of [
   assert.deepEqual(await snapshot(), before);
 });
 test('admin general conserva operaciones en otra sede de su empresa', async () => {
-  assert.equal((await call('put', '/sedes/102', 1, { nombre: 'Permitida' })).status, 200);
+  assert.equal((await call('patch', '/sedes/102', 1, { nombre: 'Permitida' })).status, 200);
   assert.equal((await call('patch', '/usuarios/8/estado', 1, { activo: false })).status, 200);
   assert.equal((await call('patch', '/usuarios/8/estado', 1, { activo: true })).status, 200);
   const id = await reserve(8);
@@ -474,7 +476,7 @@ for (const table of ['sedes', 'reservas']) test(`${table}: error SQL de escritur
     CREATE TRIGGER fail_write AFTER UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION fail_write();`);
   const before = await snapshot();
   try {
-    const res = table === 'sedes' ? await call('put', `/sedes/${id}`, 1, { nombre: 'Cambio' }) :
+    const res = table === 'sedes' ? await call('patch', `/sedes/${id}`, 1, { nombre: 'Cambio' }) :
       await call('post', `/reservas/${id}/liberar-retencion`, 7);
     assert.equal(res.status, 500, res.text);
     assert.match(res.body.message, /seg04_write_failure/);
@@ -564,7 +566,8 @@ test('usuario: edicion de perfil atrasada no restaura estado ni token_version an
   assert.equal(res.nombre, 'Nombre editado');
 });
 for (const [table, method, path, body] of [
-  ['sedes', 'put', '/sedes/101', { nombre: 'Cambio' }],
+  ['sedes', 'put', '/sedes/101', { nombre: 'Cambio', ubicacion: null }],
+  ['sedes', 'patch', '/sedes/101', { nombre: 'Cambio' }],
   ['reservas', 'patch', '/usuarios/7/estado', { activo: false }],
   ['reservas', 'post', '/reservas/1/cancel', {}]
 ]) test(`error SQL en lectura de ${method} ${path} conserva error de servidor`, async () => {

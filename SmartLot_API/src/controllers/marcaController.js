@@ -1,62 +1,51 @@
 import { Router } from 'express';
 import MarcaService from './../services/marcaService.js';
-import { isValidId, isValidString } from '../helpers/validatorHelper.js';
+import { idParam, isValidString } from '../helpers/validatorHelper.js';
 import { requireRole } from '../middlewares/rolesMiddleware.js';
+import { throwError } from '../helpers/httpError.js';
+import { BAD_REQUEST, NOT_FOUND } from '../helpers/httpStatus.js';
 
 const router = Router();
 const svc = new MarcaService();
 
-function throwError(message, statusCode) {
-    const error = new Error(message);
-    error.statusCode = statusCode;
-    throw error;
-}
+router.param('id', idParam());
 
 // GET ALL
 router.get('', async (req, res) => {
     const data = await svc.getAllAsync();
-    if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
 
 // GET BY ID
 router.get('/:id', async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
-
-    const data = await svc.getByIdAsync(id);
-    if (!data) throwError('No encontrado.', 404);
+    const data = await svc.getByIdAsync(req.params.id);
+    if (!data) throwError('No encontrado.', NOT_FOUND);
     res.status(200).json(data);
 });
 
 // CREATE (POST)
 router.post('', requireRole(4), async (req, res) => {
     const { nombre } = req.body;
-    if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
+    if (!isValidString(nombre)) throwError('El nombre es requerido.', BAD_REQUEST);
 
     const data = await svc.createAsync(req.body);
-    if (!data) throwError('Error interno al crear la marca.', 500);
     res.status(201).json(data);
 });
 
-// UPDATE (PUT)
+// UPDATE (PUT): reemplazo completo, por eso exige todos los campos obligatorios.
 router.put('/:id', requireRole(4), async (req, res) => {
-    if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
     const { nombre } = req.body;
-    if (nombre !== undefined && !isValidString(nombre)) throwError('El nombre no puede estar vacío.', 400);
+    if (!isValidString(nombre)) throwError('El nombre es requerido.', BAD_REQUEST);
 
-    const data = await svc.updateAsync(parseInt(req.params.id, 10), req.body);
-    if (!data) throwError('No encontrado: La marca con ese ID no existe.', 404);
+    const data = await svc.updateAsync(req.params.id, req.body);
+    if (!data) throwError('No encontrado: La marca con ese ID no existe.', NOT_FOUND);
     res.status(200).json(data);
 });
 
 // DELETE
 router.delete('/:id', requireRole(4), async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
-
-    const ok = await svc.deleteAsync(id, req.usuario);
-    if (!ok) throwError('No encontrado: La marca con ese ID no existe.', 404);
+    const ok = await svc.deleteAsync(req.params.id, req.usuario);
+    if (!ok) throwError('No encontrado: La marca con ese ID no existe.', NOT_FOUND);
     res.status(200).json({ message: 'Eliminado exitosamente.' });
 });
 

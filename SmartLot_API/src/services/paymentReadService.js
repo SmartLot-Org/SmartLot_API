@@ -2,17 +2,11 @@ import { getEnterpriseOrderForLocal, syncEnterprisePayment } from './enterpriseP
 import pool from '../database/db.js';
 import { getPayment, searchPayments } from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
+import { httpError } from '../helpers/httpError.js';
 
 const READ_ROLES = Object.freeze({ ADMIN: 1, EMPLOYEE: 2, SUPERADMIN: 4 });
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 50;
-
-function httpError(message, statusCode, code) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  if (code) error.code = code;
-  return error;
-}
 
 function textOrNull(value, maxLength, field) {
   if (value === undefined || value === null || value === '') return null;
@@ -421,9 +415,10 @@ async function synchronizeByReference(user, filters) {
   await updateAuthorizedLocalPayment(local, matches[0]);
 }
 
+// Lectura pura: nunca consulta a Mercado Pago ni escribe. La sincronización por
+// referencia es una acción explícita (verifyAuthorizedPaymentsByReference).
 export async function listAuthorizedPayments(user, rawQuery = {}) {
   const filters = parsePaymentReadFilters(rawQuery);
-  if (filters.externalReference) await synchronizeByReference(user, filters);
 
   const aggregateParams = accessParams(user);
   const aggregateWhere = listWhere(filters, aggregateParams);
@@ -459,18 +454,40 @@ export async function listAuthorizedPayments(user, rawQuery = {}) {
   };
 }
 
-export async function getAuthorizedPayment(user, rawPaymentId, rawQuery = {}) {
+function parseProviderPaymentId(rawPaymentId) {
   const paymentId = String(rawPaymentId || '').trim();
   if (!/^\d+$/.test(paymentId)) {
     throw httpError('paymentId debe ser el identificador numerico de Mercado Pago.', 400, 'invalid_payment_id');
   }
+  return paymentId;
+}
+
+// Lectura pura del estado local ya autorizado: no consulta a Mercado Pago ni escribe.
+// Un pago que todavía no se sincronizó se verifica con verifyAuthorizedPayment.
+export async function getAuthorizedPayment(user, rawPaymentId) {
+  const paymentId = parseProviderPaymentId(rawPaymentId);
+  const local = await authorizedPaymentByProviderId(user, paymentId);
+  if (!local) throw httpError('Pago no encontrado.', 404, 'payment_not_found');
+  if (String(local.mp_payment_id) === paymentId) return { payment: toPaymentResponse(local) };
+
+  // Intento empresarial distinto del aceptado: se informa la foto del proveedor ya guardada.
+  const attempt = (await pool.query(`SELECT provider_snapshot FROM enterprise_payment_attempts
+    WHERE payment_id=$1 AND reference=$2`, [paymentId, local.id_orden_externa])).rows[0];
+  if (!attempt?.provider_snapshot) throw httpError('Pago no encontrado.', 404, 'payment_not_found');
+  return { payment: toPaymentResponse(attempt.provider_snapshot) };
+}
+
+// Acción: consulta el pago en Mercado Pago, comprueba que corresponda al registro local
+// autorizado y sincroniza el estado. Escribe en `pagos`, por eso se expone como POST.
+export async function verifyAuthorizedPayment(user, rawPaymentId, rawBody = {}) {
+  const paymentId = parseProviderPaymentId(rawPaymentId);
 
   let local = await authorizedPaymentByProviderId(user, paymentId);
   let pendingLookup = false;
   if (!local) {
     const filters = parsePaymentReadFilters({
-      external_reference: rawQuery.external_reference,
-      preference_id: rawQuery.preference_id
+      external_reference: rawBody.externalReference,
+      preference_id: rawBody.preferenceId
     });
     if (!filters.externalReference) throw httpError('Pago no encontrado.', 404, 'payment_not_found');
     const candidates = await authorizedReferenceCandidates(user, filters.externalReference, filters.preferenceId);
@@ -485,7 +502,14 @@ export async function getAuthorizedPayment(user, rawPaymentId, rawQuery = {}) {
   const correlation = enterpriseOrder
     ? { id_orden_externa: local.id_orden_externa, mp_preference_id: local.mp_preference_id }
     : local;
-  const payment = await getPayment(paymentId);
+  let payment;
+  try {
+    payment = await getPayment(paymentId);
+  } catch (error) {
+    // Un pago que Mercado Pago no conoce es "no encontrado", sin el detalle del proveedor.
+    if (error.statusCode === 404) throw httpError('Pago no encontrado.', 404, 'payment_not_found');
+    throw error;
+  }
   if (!await providerPaymentMatchesLocal(payment, correlation, paymentId)) {
     throw httpError(
       pendingLookup ? 'Pago no encontrado.' : 'El proveedor devolvio referencias contradictorias para el pago local.',
@@ -511,6 +535,20 @@ export async function getAuthorizedPayment(user, rawPaymentId, rawQuery = {}) {
       preferenceId: local.mp_preference_id ?? null
     }
   };
+}
+
+// Acción: sincroniza con Mercado Pago los pagos de una referencia y devuelve la lista local
+// resultante. Es el equivalente explícito del viejo GET /?external_reference=.
+export async function verifyAuthorizedPaymentsByReference(user, rawBody = {}) {
+  const filters = parsePaymentReadFilters({
+    external_reference: rawBody.externalReference,
+    preference_id: rawBody.preferenceId
+  });
+  if (!filters.externalReference) {
+    throw httpError('externalReference es requerido.', 400, 'invalid_filter');
+  }
+  await synchronizeByReference(user, filters);
+  return listAuthorizedPayments(user, { external_reference: filters.externalReference });
 }
 
 export async function listWebhookEvents(rawQuery = {}) {

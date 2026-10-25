@@ -374,13 +374,16 @@ for (const [name, patch] of [
   await deliverSnapshot({ ...approved(order), status: 'rejected', ...patch }, `conflict-${name}`);
   assert.deepEqual(await financialEvidence(), before);
   assert.ok((await db.query('SELECT reconciliation_issue FROM enterprise_payment_orders')).rows[0].reconciliation_issue);
-  const detail = await request(app).get('/900');
+  const detail = await request(app).post('/900/verificar');
   assert.equal(detail.status, 200, detail.text);
   assert.equal(detail.body.payment.status, 'approved');
   searchResults = [{ id: '900' }];
-  const list = await request(app).get('/').query({ external_reference: order.orderId });
+  const list = await request(app).post('/verificar').send({ externalReference: order.orderId });
   assert.equal(list.status, 200, list.text);
   assert.equal(list.body.results[0].status, 'approved');
+  const read = await request(app).get('/900');
+  assert.equal(read.status, 200, read.text);
+  assert.equal(read.body.payment.status, 'approved');
   assert.deepEqual(await financialEvidence(), before);
 });
 
@@ -397,13 +400,16 @@ for (const [name, patch, status] of [
   assert.equal(before.order.settled, false);
   assert.equal(before.payment.mp_payment_status, status);
   await deliverSnapshot(old, `stale-approved-${name}`);
-  const detail = await request(app).get('/900');
+  const detail = await request(app).post('/900/verificar');
   assert.equal(detail.status, 200, detail.text);
   assert.equal(detail.body.payment.status, status);
   searchResults = [{ id: '900' }];
-  const list = await request(app).get('/').query({ external_reference: order.orderId });
+  const list = await request(app).post('/verificar').send({ externalReference: order.orderId });
   assert.equal(list.status, 200, list.text);
   assert.equal(list.body.results[0].status, status);
+  const read = await request(app).get('/900');
+  assert.equal(read.status, 200, read.text);
+  assert.equal(read.body.payment.status, status);
   assert.deepEqual(await financialEvidence(), before);
 });
 
@@ -419,14 +425,14 @@ test('HTTP: reversion parcial progresa a total y una parcial anterior no reempla
   assert.deepEqual(await financialEvidence(), before);
 });
 
-for (const endpoint of ['id', 'referencia']) test(`HTTP: consulta por ${endpoint} retenida devuelve aprobacion aceptada tras carrera`, async () => {
+for (const endpoint of ['id', 'referencia']) test(`HTTP: verificacion por ${endpoint} retenida devuelve aprobacion aceptada tras carrera`, async () => {
   const order = await createEnterprisePreference(admin, { consumosIds: [1] });
   await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:00:00.000Z' });
   providerById.set('900', { ...approved(order), status: 'pending', date_last_updated: '2026-10-22T09:59:00.000Z' });
   searchResults = [{ id: '900' }];
   const gate = { started: Promise.withResolvers(), release: Promise.withResolvers() };
   paymentResponseGate = gate;
-  const first = (endpoint === 'id' ? request(app).get('/900') : request(app).get('/').query({ external_reference: order.orderId })).then(r => r);
+  const first = (endpoint === 'id' ? request(app).post('/900/verificar') : request(app).post('/verificar').send({ externalReference: order.orderId })).then(r => r);
   await gate.started.promise;
   try {
     await deliverSnapshot({ ...approved(order), date_last_updated: '2026-10-22T10:01:00.000Z' }, 'fresh');
@@ -550,11 +556,11 @@ test('dos aprobados generan una incidencia y conservan el primer pago aceptado',
   assert.equal(calls.length, 1);
 });
 
-test('consulta HTTP por ID reconoce otro intento autorizado y no exige el ID del rechazado', async () => {
+test('verificacion HTTP por ID reconoce otro intento autorizado y no exige el ID del rechazado', async () => {
   const order = await createEnterprisePreference(admin, { consumosIds: [1] });
   await webhookAttempt(order, '900', 'rejected');
   providerById.set('901', { ...approved(order), id: '901' });
-  const result = await request(app).get('/901').query({ external_reference: order.orderId, preference_id: order.preferenceId });
+  const result = await request(app).post('/901/verificar').send({ externalReference: order.orderId, preferenceId: order.preferenceId });
   assert.equal(result.status, 200, result.text);
   assert.equal(result.body.payment.id, '901');
   assert.equal((await db.query('SELECT accepted_payment_id FROM enterprise_payment_orders')).rows[0].accepted_payment_id, '901');
@@ -564,7 +570,7 @@ test('consulta HTTP por ID reconoce otro intento autorizado y no exige el ID del
   assert.equal((await db.query('SELECT settled FROM enterprise_payment_orders')).rows[0].settled, true);
 });
 
-test('consulta por referencia resuelve todos los intentos incluso con un pago local registrado', async () => {
+test('verificacion por referencia resuelve todos los intentos incluso con un pago local registrado', async () => {
   const order = await createEnterprisePreference(admin, { consumosIds: [1] });
   await webhookAttempt(order, '900', 'rejected');
   // Reproduce una vinculacion local anterior a la migracion, que no es definitiva.
@@ -573,7 +579,7 @@ test('consulta por referencia resuelve todos los intentos incluso con un pago lo
   providerById.set('901', { ...approved(order), id: '901' });
   searchResults = [{ id: '900' }, { id: '901' }];
   for (let i = 0; i < 2; i++) {
-    const result = await request(app).get('/').query({ external_reference: order.orderId });
+    const result = await request(app).post('/verificar').send({ externalReference: order.orderId });
     assert.equal(result.status, 200, result.text);
     assert.equal(result.body.results[0].id, '901');
   }
@@ -591,15 +597,19 @@ test('consultas de intentos conservan el aislamiento por empresa, sede, rol e id
     { id: 2, id_rol: 2, id_empresa: 10 }, { id: 3, id_rol: 3 }, { id: 5, id_rol: 5 }
   ]) {
     for (const path of ['/900', '/901']) {
-      const result = await request(app).get(path).set('actor', JSON.stringify(user)).query({ external_reference: order.orderId });
+      const read = await request(app).get(path).set('actor', JSON.stringify(user));
+      assert.ok([403, 404].includes(read.status), read.text);
+      const result = await request(app).post(`${path}/verificar`).set('actor', JSON.stringify(user)).send({ externalReference: order.orderId });
       assert.ok([403, 404].includes(result.status), result.text);
     }
     const listed = await request(app).get('/').set('actor', JSON.stringify(user)).query({ external_reference: order.orderId });
     assert.ok(listed.status === 403 || listed.body.results.length === 0);
+    const verified = await request(app).post('/verificar').set('actor', JSON.stringify(user)).send({ externalReference: order.orderId });
+    assert.ok(verified.status === 403 || verified.body.results.length === 0);
   }
   assert.equal(providerCalls.length, 0);
   providerById.set('901', { ...approved(order), id: '999' });
-  const mismatch = await request(app).get('/901').query({ external_reference: order.orderId });
+  const mismatch = await request(app).post('/901/verificar').send({ externalReference: order.orderId });
   assert.equal(mismatch.status, 404);
   const webhook = await request(app).post('/webhook').send({ id: 'wrong-identity', type: 'payment.updated', data: { id: '901' } });
   assert.equal(webhook.status, 409);
@@ -673,13 +683,13 @@ test('dos aprobados concurrentes no sobrescriben el aceptado y dejan incidencia'
   assert.equal((await db.query('SELECT count(*) FROM enterprise_payment_consumptions')).rows[0].count, 1);
 });
 
-test('consulta por referencia vuelve a verificar el aceptado aunque search solo devuelva otro intento', async () => {
+test('verificacion por referencia vuelve a verificar el aceptado aunque search solo devuelva otro intento', async () => {
   const order = await createEnterprisePreference(admin, { consumosIds: [1] });
   await webhookAttempt(order, '900', 'approved');
   providerById.set('900', { ...approved(order), transaction_amount_refunded: 1 });
   providerById.set('901', { ...approved(order), id: '901', status: 'rejected' });
   searchResults = [{ id: '901' }];
-  const result = await request(app).get('/').query({ external_reference: order.orderId });
+  const result = await request(app).post('/verificar').send({ externalReference: order.orderId });
   assert.equal(result.status, 200, result.text);
   const row = (await db.query('SELECT * FROM enterprise_payment_orders')).rows[0];
   assert.equal(row.accepted_payment_id, '900');
@@ -688,13 +698,13 @@ test('consulta por referencia vuelve a verificar el aceptado aunque search solo 
   assert.equal((await db.query('SELECT count(*) FROM pagos')).rows[0].count, 1);
 });
 
-test('consulta por referencia pagina intentos y verifica el detalle del aprobado', async () => {
+test('verificacion por referencia pagina intentos y verifica el detalle del aprobado', async () => {
   const order = await createEnterprisePreference(admin, { consumosIds: [1] });
   providerById.set('900', { ...approved(order), status: 'rejected' });
   providerById.set('901', { ...approved(order), id: '901' });
   searchResults = [{ id: '900' }, { id: '901' }];
   searchPageSize = 1;
-  const result = await request(app).get('/').query({ external_reference: order.orderId });
+  const result = await request(app).post('/verificar').send({ externalReference: order.orderId });
   assert.equal(result.status, 200, result.text);
   assert.equal(result.body.results[0].id, '901');
   assert.ok(searchCalls.some(call => call.offset === 1));

@@ -20,6 +20,8 @@
     "check:security": "node ./scripts/check-security.cjs",
     "check:structure": "node ./scripts/check-structure.cjs",
     "check:routes": "node ./scripts/check-routes.cjs",
+    "routes:inventory": "node --experimental-test-module-mocks ./scripts/generate-api-inventory.mjs",
+    "postman:generate": "node --experimental-test-module-mocks ./scripts/generate-postman.mjs",
     "check:db": "node ./scripts/check-db.cjs",
     "check:consumos": "node ./scripts/check-consumos.cjs",
     "check:port": "node ./scripts/check-port.cjs"

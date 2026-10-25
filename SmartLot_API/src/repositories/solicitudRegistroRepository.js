@@ -3,8 +3,7 @@ import pool from '../database/db.js';
 import UsuarioRepository from './usuarioRepository.js';
 import EmpresaRepository from './empresaRepository.js';
 import { ESTADOS_SOLICITUD } from '../helpers/estadosSolicitud.js';
-
-const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
+import { throwError } from '../helpers/httpError.js';
 
 export default class SolicitudRegistroRepository {
     constructor() {
@@ -22,7 +21,7 @@ export default class SolicitudRegistroRepository {
                  entity.contraseña_hash, entity.empresa_nombre, entity.empresa_descripcion,
                  ESTADOS_SOLICITUD.PENDIENTE]
             );
-            if (!result.rows[0]) fail('No se pudo guardar la solicitud.', 500);
+            if (!result.rows[0]) throwError('No se pudo guardar la solicitud.', 500);
             return result.rows[0];
         } catch (error) {
             if (error.code === '23505' && error.constraint === 'uq_solicitudes_registro_email_pendiente') return null;
@@ -51,17 +50,17 @@ export default class SolicitudRegistroRepository {
         try {
             await client.query('BEGIN');
             const solicitud = (await client.query('SELECT * FROM solicitudes_registro WHERE id=$1 FOR UPDATE', [id])).rows[0];
-            if (!solicitud) fail('La solicitud no existe.', 404);
-            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no esta pendiente.', 409);
+            if (!solicitud) throwError('La solicitud no existe.', 404);
+            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) throwError('La solicitud ya no esta pendiente.', 409);
             const existente = (await client.query(
                 'SELECT id FROM usuarios WHERE email=$1 AND COALESCE("Borrado",false)=false LIMIT 1', [solicitud.email]
             )).rows[0];
-            if (existente) fail(`Ya existe un usuario con el email ${solicitud.email}.`, 409);
+            if (existente) throwError(`Ya existe un usuario con el email ${solicitud.email}.`, 409);
             const empresa = await this.empresaRepo.createWithClientAsync({
                 nombre: solicitud.empresa_nombre,
                 descripcion: solicitud.empresa_descripcion,
             }, client);
-            if (!empresa) fail('Error interno al crear la empresa.', 500);
+            if (!empresa) throwError('Error interno al crear la empresa.', 500);
             // La contraseña ya viaja hasheada desde la solicitud: se inserta tal cual, sin re-hashear.
             const usuario = await this.usuarioRepo.createWithClientAsync({
                 id_rol: idRolAdmin,
@@ -80,12 +79,12 @@ export default class SolicitudRegistroRepository {
                   WHERE id=$3 AND estado=$4 RETURNING *`,
                 [ESTADOS_SOLICITUD.ACEPTADA, idRevisor, id, ESTADOS_SOLICITUD.PENDIENTE]
             );
-            if (updated.rowCount !== 1) fail('La solicitud ya no esta pendiente.', 409);
+            if (updated.rowCount !== 1) throwError('La solicitud ya no esta pendiente.', 409);
             await client.query('COMMIT');
             return { solicitud: updated.rows[0], empresa, usuario };
         } catch (error) {
             await client.query('ROLLBACK');
-            if (error.code === '23505') fail('Ya existe un usuario con ese email.', 409);
+            if (error.code === '23505') throwError('Ya existe un usuario con ese email.', 409);
             throw error;
         } finally { client.release(); }
     };
@@ -95,14 +94,14 @@ export default class SolicitudRegistroRepository {
         try {
             await client.query('BEGIN');
             const solicitud = (await client.query('SELECT * FROM solicitudes_registro WHERE id=$1 FOR UPDATE', [id])).rows[0];
-            if (!solicitud) fail('La solicitud no existe.', 404);
-            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) fail('La solicitud ya no esta pendiente.', 409);
+            if (!solicitud) throwError('La solicitud no existe.', 404);
+            if (solicitud.estado !== ESTADOS_SOLICITUD.PENDIENTE) throwError('La solicitud ya no esta pendiente.', 409);
             const updated = await client.query(
                 `UPDATE solicitudes_registro SET estado=$1, revisada_at=NOW(), revisada_por=$2
                   WHERE id=$3 AND estado=$4 RETURNING *`,
                 [ESTADOS_SOLICITUD.RECHAZADA, idRevisor, id, ESTADOS_SOLICITUD.PENDIENTE]
             );
-            if (updated.rowCount !== 1) fail('La solicitud ya no esta pendiente.', 409);
+            if (updated.rowCount !== 1) throwError('La solicitud ya no esta pendiente.', 409);
             await client.query('COMMIT');
             return updated.rows[0];
         } catch (error) {

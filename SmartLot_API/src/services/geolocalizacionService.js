@@ -88,7 +88,7 @@ export const obtenerGaragesCercanosConTiempoReal = async (sedeLat, sedeLng, radi
     const repo = new GarageRepository();
     const garages = await repo.getCercanosAsync(sedeLat, sedeLng, radioKm, sedeId);
 
-    if (!garages || garages.length === 0) {
+    if (garages.length === 0) {
         return [];
     }
 

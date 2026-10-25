@@ -1,57 +1,38 @@
 // usuarioRepository.js
 import pool from '../database/db.js';
 import { writeTenantFilter } from '../helpers/writeTenantFilter.js';
-import { writeError } from '../helpers/writeAuthorization.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
+import { httpError } from '../helpers/httpError.js';
 
 export default class UsuarioRepository {
     constructor() {
         console.log('Estoy en: UsuarioRepository.constructor()');
     }
 
-    createSessionAsync = async (usuario_id, token_version, refresh_token, expires_at, { throwOnError = false } = {}) => {
-        try {
-            const result = await pool.query(
-                `INSERT INTO refresh_sessions (usuario_id, token_version, refresh_token, expires_at)
-                 VALUES ($1, $2, $3, $4) RETURNING id`,
-                [usuario_id, token_version, refresh_token, expires_at]
-            );
-            return result.rows[0].id;
-        } catch (error) {
-            if (throwOnError) throw error;
-            console.error('Error en createSessionAsync:', error);
-            return null;
-        }
+    createSessionAsync = async (usuario_id, token_version, refresh_token, expires_at) => {
+        const result = await pool.query(
+            `INSERT INTO refresh_sessions (usuario_id, token_version, refresh_token, expires_at)
+             VALUES ($1, $2, $3, $4) RETURNING id`,
+            [usuario_id, token_version, refresh_token, expires_at]
+        );
+        return result.rows[0].id;
     }
 
     getSessionAsync = async (session_id) => {
-        try {
-            const result = await pool.query(
-                'SELECT * FROM refresh_sessions WHERE id = $1 AND expires_at > NOW()',
-                [session_id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) {
-            console.error('Error en getSessionAsync:', error);
-            return null;
-        }
+        const result = await pool.query(
+            'SELECT * FROM refresh_sessions WHERE id = $1 AND expires_at > NOW()',
+            [session_id]
+        );
+        return result.rows[0] ?? null;
     }
 
     deleteSessionAsync = async (session_id) => {
-        try {
-            await pool.query('DELETE FROM refresh_sessions WHERE id = $1', [session_id]);
-        } catch (error) {
-            console.error('Error en deleteSessionAsync:', error);
-        }
+        await pool.query('DELETE FROM refresh_sessions WHERE id = $1', [session_id]);
     }
 
     deleteUserSessionsAsync = async (usuario_id) => {
-        try {
-            await pool.query('DELETE FROM refresh_sessions WHERE usuario_id = $1', [usuario_id]);
-        } catch (error) {
-            console.error('Error en deleteUserSessionsAsync:', error);
-        }
+        await pool.query('DELETE FROM refresh_sessions WHERE usuario_id = $1', [usuario_id]);
     }
 
     revokeLogoutSessionsAsync = async (id, version, client) => {
@@ -97,109 +78,97 @@ export default class UsuarioRepository {
     };
 
     getAllAsync = async (requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
-            const result = await pool.query(
-                `SELECT u.*, r.tipo_rol,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
-                 FROM usuarios u
-                 LEFT JOIN roles r ON r.id = u.id_rol
-                 LEFT JOIN LATERAL (
-                    SELECT MIN(ug.id_garage) AS id_garage,
-                           ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
-                    FROM usuario_garage ug
-                    WHERE ug.id_usuario = u.id
-                 ) garages ON true
-                 WHERE COALESCE(u."Borrado", false) = false ${tenant.sql}
-                 ORDER BY u.id`,
-                [...tenant.params]
-            );
-            return result.rows;
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const result = await pool.query(
+            `SELECT u.*, r.tipo_rol,
+                CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
+                CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
+             FROM usuarios u
+             LEFT JOIN roles r ON r.id = u.id_rol
+             LEFT JOIN LATERAL (
+                SELECT MIN(ug.id_garage) AS id_garage,
+                       ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                FROM usuario_garage ug
+                WHERE ug.id_usuario = u.id
+             ) garages ON true
+             WHERE COALESCE(u."Borrado", false) = false ${tenant.sql}
+             ORDER BY u.id`,
+            [...tenant.params]
+        );
+        return result.rows;
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
-        try {
-            // Cada usuario siempre puede leer su propio registro (la ruta valida
-            // que sea admin, superadmin o el propio usuario). Los garagistas y
-            // dueños no tienen id_sede/id_empresa y no deben quedar bloqueados.
-            const tenant = requestingUser && Number(requestingUser.id) === Number(id)
-                ? { sql: '', params: [] }
-                : getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
-            const result = await pool.query(
-                `SELECT u.*, r.tipo_rol,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
-                 FROM usuarios u
-                 LEFT JOIN roles r ON r.id = u.id_rol
-                 LEFT JOIN LATERAL (
-                    SELECT MIN(ug.id_garage) AS id_garage,
-                           ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
-                    FROM usuario_garage ug
-                    WHERE ug.id_usuario = u.id
-                 ) garages ON true
-                 WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
-                [id, ...tenant.params]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        // Cada usuario siempre puede leer su propio registro (la ruta valida
+        // que sea admin, superadmin o el propio usuario). Los garagistas y
+        // dueños no tienen id_sede/id_empresa y no deben quedar bloqueados.
+        const tenant = requestingUser && Number(requestingUser.id) === Number(id)
+            ? { sql: '', params: [] }
+            : getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const result = await pool.query(
+            `SELECT u.*, r.tipo_rol,
+                CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
+                CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
+             FROM usuarios u
+             LEFT JOIN roles r ON r.id = u.id_rol
+             LEFT JOIN LATERAL (
+                SELECT MIN(ug.id_garage) AS id_garage,
+                       ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                FROM usuario_garage ug
+                WHERE ug.id_usuario = u.id
+             ) garages ON true
+             WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${tenant.sql}`,
+            [id, ...tenant.params]
+        );
+        return result.rows[0] ?? null;
     }
 
-    getByEmailAsync = async (email, { throwOnError = false } = {}) => {
-        try {
-            const result = await pool.query(
-                `SELECT u.*, r.tipo_rol,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
-                    CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
-                 FROM usuarios u
-                 LEFT JOIN roles r ON r.id = u.id_rol
-                 LEFT JOIN LATERAL (
-                    SELECT MIN(ug.id_garage) AS id_garage,
-                           ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
-                    FROM usuario_garage ug
-                    WHERE ug.id_usuario = u.id
-                 ) garages ON true
-                 WHERE u.email = $1 AND COALESCE(u."Borrado", false) = false`,
-                [email]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) {
-            if (throwOnError) throw error;
-            console.error(error);
-            return null;
-        }
+    getByEmailAsync = async (email) => {
+        const result = await pool.query(
+            `SELECT u.*, r.tipo_rol,
+                CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN garages.id_garage ELSE NULL END AS id_garage,
+                CASE WHEN lower(r.tipo_rol) IN ('garagista', 'dueño_garage') THEN COALESCE(garages.id_garages, '{}'::int[]) ELSE '{}'::int[] END AS id_garages
+             FROM usuarios u
+             LEFT JOIN roles r ON r.id = u.id_rol
+             LEFT JOIN LATERAL (
+                SELECT MIN(ug.id_garage) AS id_garage,
+                       ARRAY_AGG(DISTINCT ug.id_garage ORDER BY ug.id_garage) AS id_garages
+                FROM usuario_garage ug
+                WHERE ug.id_usuario = u.id
+             ) garages ON true
+             WHERE u.email = $1 AND COALESCE(u."Borrado", false) = false`,
+            [email]
+        );
+        return result.rows[0] ?? null;
     }
 
     getAuditAsync = async () => {
-        try {
-            const result = await pool.query(
-                `SELECT
-                    u.id,
-                    u.id_rol,
-                    u.nombre,
-                    u.apellido,
-                    u.email,
-                    u.activo,
-                    u."Borrado",
-                    u."UpdateBy",
-                    u."UpdateAt",
-                    u."DeleteBy",
-                    u."DeleteAt",
-                    CONCAT_WS(' ', update_user.nombre, update_user.apellido) AS "UpdateByNombre",
-                    update_user.email AS "UpdateByEmail",
-                    CONCAT_WS(' ', delete_user.nombre, delete_user.apellido) AS "DeleteByNombre",
-                    delete_user.email AS "DeleteByEmail"
-                 FROM usuarios u
-                 LEFT JOIN usuarios update_user ON update_user.id = u."UpdateBy"
-                 LEFT JOIN usuarios delete_user ON delete_user.id = u."DeleteBy"
-                 WHERE u."UpdateAt" IS NOT NULL
-                    OR u."DeleteAt" IS NOT NULL
-                    OR COALESCE(u."Borrado", false) = true
-                 ORDER BY COALESCE(u."DeleteAt", u."UpdateAt") DESC NULLS LAST, u.id DESC`
-            );
-            return result.rows;
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT
+                u.id,
+                u.id_rol,
+                u.nombre,
+                u.apellido,
+                u.email,
+                u.activo,
+                u."Borrado",
+                u."UpdateBy",
+                u."UpdateAt",
+                u."DeleteBy",
+                u."DeleteAt",
+                CONCAT_WS(' ', update_user.nombre, update_user.apellido) AS "UpdateByNombre",
+                update_user.email AS "UpdateByEmail",
+                CONCAT_WS(' ', delete_user.nombre, delete_user.apellido) AS "DeleteByNombre",
+                delete_user.email AS "DeleteByEmail"
+             FROM usuarios u
+             LEFT JOIN usuarios update_user ON update_user.id = u."UpdateBy"
+             LEFT JOIN usuarios delete_user ON delete_user.id = u."DeleteBy"
+             WHERE u."UpdateAt" IS NOT NULL
+                OR u."DeleteAt" IS NOT NULL
+                OR COALESCE(u."Borrado", false) = true
+             ORDER BY COALESCE(u."DeleteAt", u."UpdateAt") DESC NULLS LAST, u.id DESC`
+        );
+        return result.rows;
     }
 
     createAsync = async (entity) => {
@@ -212,15 +181,8 @@ export default class UsuarioRepository {
             );
             return result.rows[0];
         } catch (error) {
-            if (error.code === '23505') {
-                const err = new Error('Ya existe un usuario con ese email.');
-                err.statusCode = 409;
-                throw err;
-            }
-            console.error(error);
-            const err = new Error('Error al crear el usuario en la base de datos.');
-            err.statusCode = 500;
-            throw err;
+            if (error.code === '23505') throw httpError('Ya existe un usuario con ese email.', 409);
+            throw error;
         }
     }
 
@@ -234,15 +196,8 @@ export default class UsuarioRepository {
             );
             return result.rows[0];
         } catch (error) {
-            if (error.code === '23505') {
-                const err = new Error('Ya existe un usuario con ese email.');
-                err.statusCode = 409;
-                throw err;
-            }
-            console.error(error);
-            const err = new Error('Error al crear el usuario en la base de datos.');
-            err.statusCode = 500;
-            throw err;
+            if (error.code === '23505') throw httpError('Ya existe un usuario con ese email.', 409);
+            throw error;
         }
     }
 
@@ -278,16 +233,16 @@ export default class UsuarioRepository {
         'SELECT id FROM usuarios WHERE email=$1 AND COALESCE("Borrado",false)=false', [email])).rows[0] ?? null;
 
     validateEditDestinationAsync = async (entity, client) => {
-        if (!await this.getEditRoleAsync(entity.id_rol, client)) throw writeError('El rol indicado no existe.', 400);
+        if (!await this.getEditRoleAsync(entity.id_rol, client)) throw httpError('El rol indicado no existe.', 400);
         if (entity.id_empresa != null) {
             const company = (await client.query(`SELECT id FROM empresas WHERE id=$1
                 AND COALESCE("Borrado",false)=false FOR SHARE`, [entity.id_empresa])).rows[0];
-            if (!company) throw writeError('La empresa indicada no existe.', 400);
+            if (!company) throw httpError('La empresa indicada no existe.', 400);
         }
         if (entity.id_sede != null) {
             const site = (await client.query(`SELECT id,id_empresa FROM sedes WHERE id=$1
                 AND COALESCE("Borrado",false)=false FOR SHARE`, [entity.id_sede])).rows[0];
-            if (!site) throw writeError('La sede indicada no existe.', 400);
+            if (!site) throw httpError('La sede indicada no existe.', 400);
             return site;
         }
         return null;
@@ -296,7 +251,7 @@ export default class UsuarioRepository {
     validateLifecycleReservationsAsync = async (id, deleting, client) => {
         const result = await client.query(`SELECT id FROM reservas WHERE id_usuario=$1
             AND COALESCE("Borrado",false)=false ${deleting ? '' : 'AND COALESCE(salio,false)=false'} LIMIT 1`, [id]);
-        if (result.rows.length) throw writeError(deleting ?
+        if (result.rows.length) throw httpError(deleting ?
             'No se puede eliminar el usuario porque tiene reservas asociadas.' :
             'No se puede desactivar el usuario porque tiene reservas activas.', 400);
     }
@@ -331,13 +286,11 @@ export default class UsuarioRepository {
     }
 
     incrementTokenVersionAsync = async (id) => {
-        try {
-            const result = await pool.query(
-                'UPDATE usuarios SET token_version = token_version + 1 WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING token_version',
-                [id]
-            );
-            return result.rows[0]?.token_version ?? null;
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            'UPDATE usuarios SET token_version = token_version + 1 WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING token_version',
+            [id]
+        );
+        return result.rows[0]?.token_version ?? null;
     }
 
     deleteAsync = async (id, scope, client = pool) => {
@@ -357,21 +310,16 @@ export default class UsuarioRepository {
     }
 
     getSuperadminsActivosAsync = async () => {
-        try {
-            const result = await pool.query(
-                `SELECT u.id, u.email, u.nombre, u.apellido
-                  FROM usuarios u
-                  INNER JOIN roles r ON r.id = u.id_rol
-                  WHERE (u.id_rol = 4 OR lower(trim(r.tipo_rol)) = 'superadmin')
-                    AND COALESCE(u.activo, true) = true
-                    AND COALESCE(u."Borrado", false) = false
-                    AND COALESCE(r."Borrado", false) = false`
-            );
-            return result.rows;
-        } catch (error) {
-            console.error('Error en getSuperadminsActivosAsync:', error);
-            return [];
-        }
+        const result = await pool.query(
+            `SELECT u.id, u.email, u.nombre, u.apellido
+              FROM usuarios u
+              INNER JOIN roles r ON r.id = u.id_rol
+              WHERE (u.id_rol = 4 OR lower(trim(r.tipo_rol)) = 'superadmin')
+                AND COALESCE(u.activo, true) = true
+                AND COALESCE(u."Borrado", false) = false
+                AND COALESCE(r."Borrado", false) = false`
+        );
+        return result.rows;
     }
 
 }

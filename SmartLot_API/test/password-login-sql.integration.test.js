@@ -172,15 +172,13 @@ test('ni acertar la contraseña del señuelo puede autorizar una cuenta inexiste
   assert.deepEqual(await sessionState(),before);
 });
 
-test('el cambio de errores SQL es opt-in; otros consumidores conservan getByEmailAsync', async () => {
+test('getByEmailAsync propaga el error SQL en lugar de devolver null (no existe != falló la consulta)', async () => {
   const { default: Repository } = await import('../src/repositories/usuarioRepository.js');
   const repo = new Repository();
   failRead = true;
-  const log = mock.method(console,'error',()=>{});
-  try {
-    assert.equal(await repo.getByEmailAsync('active@example.test'),null);
-    await assert.rejects(repo.getByEmailAsync('active@example.test',{throwOnError:true}),/Test SQL read failure/);
-  } finally { log.mock.restore(); }
+  await assert.rejects(repo.getByEmailAsync('active@example.test'),/Test SQL read failure/);
+  failRead = false;
+  assert.equal(await repo.getByEmailAsync('missing@example.test'),null);
 });
 
 test('el rate limiter mantiene 429 y el 403 de autorización protegida no cambia', async () => {

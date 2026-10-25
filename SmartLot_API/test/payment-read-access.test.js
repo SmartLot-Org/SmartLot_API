@@ -231,6 +231,14 @@ function get(path, userId, query) {
   return call;
 }
 
+function post(path, userId, body = {}) {
+  let call = request(app).post(path);
+  if (userId) call = call.set('Authorization', `Bearer ${token(userId)}`);
+  return call.send(body);
+}
+
+const writesToPagos = () => state.queries.filter((q) => /^\s*(\/\*[^*]*\*\/\s*)?(INSERT INTO|UPDATE|DELETE FROM)\s+pagos\b/i.test(q.sql));
+
 test.beforeEach(() => {
   state.payments = clone(basePayments);
   state.providerPayments = clone(baseProviderPayments);
@@ -243,6 +251,10 @@ test.beforeEach(() => {
 test('las consultas protegidas sin sesion responden 401', async () => {
   for (const path of ['/api/payments', '/api/payments/100', '/api/payments/webhook-events']) {
     const response = await get(path);
+    assert.equal(response.status, 401, path);
+  }
+  for (const path of ['/api/payments/verificar', '/api/payments/100/verificar']) {
+    const response = await post(path);
     assert.equal(response.status, 401, path);
   }
   assert.equal(state.providerCalls.length, 0);
@@ -305,6 +317,10 @@ test('dueño y garagista reciben 403 antes de consultar datos o proveedor', asyn
   for (const id of [3, 5]) {
     for (const path of ['/api/payments', '/api/payments/100']) {
       const response = await get(path, id);
+      assert.equal(response.status, 403, `${id} ${path}`);
+    }
+    for (const path of ['/api/payments/verificar', '/api/payments/100/verificar']) {
+      const response = await post(path, id, { externalReference: 'A-OWN' });
       assert.equal(response.status, 403, `${id} ${path}`);
     }
   }
@@ -371,8 +387,8 @@ test('respuestas de pagos permitidas usan allowlist y omiten metadata, pagador y
 });
 
 test('empleado verifica pago propio tras checkout antes del webhook usando preferencia local', async () => {
-  const response = await get('/api/payments/500', 2, {
-    external_reference: 'reserva-50', preference_id: 'pref-employee'
+  const response = await post('/api/payments/500/verificar', 2, {
+    externalReference: 'reserva-50', preferenceId: 'pref-employee'
   });
   assert.equal(response.status, 200);
   assert.equal(response.body.payment.id, '500');
@@ -387,7 +403,7 @@ test('empleado consulta pago historico propio con preferencia nula sin abrir el 
   const provider = state.providerPayments.find((p) => p.id === '100');
   provider._expectedPreferenceId = null;
 
-  const own = await get('/api/payments/100', 2);
+  const own = await post('/api/payments/100/verificar', 2);
   assert.equal(own.status, 200);
   assert.equal(own.body.payment.id, '100');
   assert.deepEqual(state.providerCalls, [['getPayment', '100']]);
@@ -395,14 +411,14 @@ test('empleado consulta pago historico propio con preferencia nula sin abrir el 
 
   state.providerCalls.length = 0;
   state.writes.length = 0;
-  const foreign = await get('/api/payments/100', 7);
+  const foreign = await post('/api/payments/100/verificar', 7);
   assert.equal(foreign.status, 404);
   assert.deepEqual(state.providerCalls, []);
   assert.deepEqual(state.writes, []);
 });
 
 test('admin verifica pago agrupado autorizado por referencia antes del webhook', async () => {
-  const response = await get('/api/payments', 8, { external_reference: 'ADMIN-A-PENDING' });
+  const response = await post('/api/payments/verificar', 8, { externalReference: 'ADMIN-A-PENDING' });
   assert.equal(response.status, 200);
   assert.deepEqual(response.body.results.map((p) => p.id), ['600']);
   assert.deepEqual(state.providerCalls, [
@@ -414,7 +430,8 @@ test('admin verifica pago agrupado autorizado por referencia antes del webhook',
 
 test('referencia ajena o detalle ajeno no consulta proveedor ni escribe', async () => {
   assert.equal((await get('/api/payments/200', 2)).status, 404);
-  const search = await get('/api/payments', 2, { external_reference: 'B-PAY' });
+  assert.equal((await post('/api/payments/200/verificar', 2)).status, 404);
+  const search = await post('/api/payments/verificar', 2, { externalReference: 'B-PAY' });
   assert.equal(search.status, 200);
   assert.deepEqual(search.body.results, []);
   assert.equal(state.providerCalls.length, 0);
@@ -424,7 +441,7 @@ test('referencia ajena o detalle ajeno no consulta proveedor ni escribe', async 
 test('una asociacion contradictoria devuelta por el proveedor no se persiste como valida', async () => {
   const providerPayment = state.providerPayments.find((p) => p.id === '100');
   providerPayment._expectedPreferenceId = 'pref-otra';
-  const response = await get('/api/payments/100', 2);
+  const response = await post('/api/payments/100/verificar', 2);
   assert.equal(response.status, 409);
   assert.equal(response.body.code, 'payment_reference_conflict');
   assert.deepEqual(state.providerCalls, [['getPayment', '100'], ['getMerchantOrder', 'merchant-100']]);
@@ -436,7 +453,7 @@ test('una referencia local autorizada ambigua se rechaza antes de consultar al p
   duplicate.id = 'pending-admin-duplicate';
   duplicate.mp_preference_id = 'pref-admin-duplicate';
   state.payments.push(duplicate);
-  const response = await get('/api/payments', 1, { external_reference: 'ADMIN-A-PENDING' });
+  const response = await post('/api/payments/verificar', 1, { externalReference: 'ADMIN-A-PENDING' });
   assert.equal(response.status, 409);
   assert.equal(response.body.code, 'ambiguous_payment_reference');
   assert.equal(state.providerCalls.length, 0);
@@ -446,7 +463,7 @@ test('una referencia local autorizada ambigua se rechaza antes de consultar al p
 test('POST webhook conserva el flujo publico y la verificacion de firma', async () => {
   state.webhookValid = false;
   const denied = await request(app).post('/api/payments/webhook').send({ id: 'evt-denied', type: 'payment.updated', data: { id: '100' } });
-  assert.equal(denied.status, 400);
+  assert.equal(denied.status, 401);
   assert.equal(state.writes.length, 0);
 
   state.webhookValid = true;
@@ -454,4 +471,68 @@ test('POST webhook conserva el flujo publico y la verificacion de firma', async 
   assert.equal(accepted.status, 200);
   assert.deepEqual(accepted.body, { received: true });
   assert.equal(state.writes.length, 2);
+});
+
+test('ningún GET consulta a Mercado Pago ni escribe en pagos', async () => {
+  const requests = [
+    get('/api/payments', 4),
+    get('/api/payments/100', 4),
+    get('/api/payments/100', 2),
+    get('/api/payments', 8, { external_reference: 'ADMIN-A-PENDING' }),
+    get('/api/payments', 2, { external_reference: 'reserva-50', preference_id: 'pref-employee' }),
+    get('/api/payments/500', 2, { external_reference: 'reserva-50', preference_id: 'pref-employee' }),
+  ];
+  for (const pending of requests) await pending;
+  assert.deepEqual(state.providerCalls, []);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(writesToPagos(), []);
+});
+
+test('GET por id lee el estado local autorizado sin sincronizar', async () => {
+  const response = await get('/api/payments/100', 2);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.payment.id, '100');
+  assert.equal(response.body.payment.status, 'approved');
+  assert.equal(response.body.payment.statusDetail, null);
+});
+
+test('GET de un pago aún no sincronizado responde 404 y deja la verificación al POST', async () => {
+  // El pago 500 existe en el proveedor, pero el registro local todavía no tiene mp_payment_id.
+  const pending = await get('/api/payments/500', 2, { external_reference: 'reserva-50', preference_id: 'pref-employee' });
+  assert.equal(pending.status, 404);
+  assert.equal(pending.body.code, 'payment_not_found');
+  assert.deepEqual(state.providerCalls, []);
+
+  const verified = await post('/api/payments/500/verificar', 2, { externalReference: 'reserva-50', preferenceId: 'pref-employee' });
+  assert.equal(verified.status, 200);
+  assert.equal((await get('/api/payments/500', 2)).status, 200);
+});
+
+test('GET /api/payments con external_reference solo filtra el listado local', async () => {
+  const response = await get('/api/payments', 8, { external_reference: 'ADMIN-A-PENDING' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.results, []);
+  assert.deepEqual(state.providerCalls, []);
+  assert.equal(state.writes.length, 0);
+});
+
+test('POST verificar valida su entrada antes de consultar al proveedor', async () => {
+  const sinReferencia = await post('/api/payments/verificar', 4, {});
+  assert.equal(sinReferencia.status, 400);
+  assert.equal(sinReferencia.body.message, 'externalReference es requerido.');
+  assert.equal((await post('/api/payments/verificar', 4, { externalReference: ['A', 'B'] })).status, 400);
+  const idInvalido = await post('/api/payments/abc/verificar', 4);
+  assert.equal(idInvalido.status, 400);
+  assert.equal(idInvalido.body.code, 'invalid_payment_id');
+  assert.deepEqual(state.providerCalls, []);
+  assert.equal(state.writes.length, 0);
+});
+
+test('POST verificar de un pago que el proveedor no conoce responde 404 sin detalle del proveedor', async () => {
+  state.providerPayments = [];
+  const response = await post('/api/payments/100/verificar', 4);
+  assert.equal(response.status, 404);
+  assert.equal(response.body.message, 'Pago no encontrado.');
+  assert.equal(response.body.code, 'payment_not_found');
+  assert.equal(state.writes.length, 0);
 });

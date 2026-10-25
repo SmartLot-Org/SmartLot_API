@@ -1,5 +1,7 @@
 import { MercadoPagoConfig, Preference, Payment, PaymentRefund, MerchantOrder } from 'mercadopago';
 import crypto from 'crypto';
+import { httpError } from '../helpers/httpError.js';
+import { BAD_GATEWAY } from '../helpers/httpStatus.js';
 
 const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN
@@ -15,6 +17,13 @@ const isLocalhost = (url) => {
   } catch {
     return true;
   }
+};
+
+// Los errores del SDK traen el status de Mercado Pago, no el de esta API. Reenviarlo haría
+// que un 401 del proveedor se lea como sesión vencida: toda falla del proveedor es un 502.
+const upstreamError = (err) => {
+  console.error('[MP] Falla del proveedor:', { status: err?.status ?? err?.statusCode, error: err?.error, message: err?.message });
+  return httpError('No se pudo completar la operación con Mercado Pago.', BAD_GATEWAY, { code: 'MP_UPSTREAM_ERROR', cause: err });
 };
 
 const cleanUrl = (url) => {
@@ -81,11 +90,14 @@ export const createPreference = async (items, orderId, backUrls = {}, metadata =
       if (process.env.MP_SANDBOX === 'true' || process.env.NODE_ENV === 'development') {
         console.log('[MP] reintentando createPreference sin auto_return, body:', JSON.stringify({ ...body, items: body.items?.length + ' items' }, null, 2));
       }
-      const retry = await preference.create({ body });
-      return retry;
+      try {
+        return await preference.create({ body });
+      } catch (retryErr) {
+        throw upstreamError(retryErr);
+      }
     }
-    // No es error de auto_return, propagar
-    throw err;
+    // No es error de auto_return
+    throw upstreamError(err);
   }
 };
 
@@ -113,9 +125,7 @@ export const getPayment = async (paymentId) => {
       e.cause = err;
       throw e;
     }
-    // Si el SDK trae status pero no statusCode, propagarlo
-    if (status && !err.statusCode) err.statusCode = status;
-    throw err;
+    throw upstreamError(err);
   }
 };
 
@@ -158,20 +168,28 @@ export const refundPayment = async (paymentId, amount, idempotencyKey) => {
   const refund = new PaymentRefund(client);
   const requestOptions = idempotencyKey ? { idempotencyKey } : undefined;
 
-  if (amount === undefined) {
-    return await refund.total({ payment_id: paymentId, requestOptions });
-  }
+  try {
+    if (amount === undefined) {
+      return await refund.total({ payment_id: paymentId, requestOptions });
+    }
 
-  return await refund.create({
-    payment_id: paymentId,
-    body: { amount: Number(amount) },
-    requestOptions
-  });
+    return await refund.create({
+      payment_id: paymentId,
+      body: { amount: Number(amount) },
+      requestOptions
+    });
+  } catch (err) {
+    throw upstreamError(err);
+  }
 };
 
 export const getMerchantOrder = async (merchantOrderId) => {
   const merchantOrder = new MerchantOrder(client);
-  return await merchantOrder.get({ merchantOrderId });
+  try {
+    return await merchantOrder.get({ merchantOrderId });
+  } catch (err) {
+    throw upstreamError(err);
+  }
 };
 
 export const searchPayments = async (filters = {}) => {
@@ -186,5 +204,9 @@ export const searchPayments = async (filters = {}) => {
     options.begin_date = filters.range.from;
     options.end_date = filters.range.to;
   }
-  return await payment.search({ options });
+  try {
+    return await payment.search({ options });
+  } catch (err) {
+    throw upstreamError(err);
+  }
 };

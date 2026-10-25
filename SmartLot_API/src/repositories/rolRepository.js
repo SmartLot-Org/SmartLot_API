@@ -7,43 +7,33 @@ export default class RolRepository {
     }
 
     getAllAsync = async () => {
-        try {
-            const result = await pool.query('SELECT * FROM roles WHERE COALESCE("Borrado", false) = false ORDER BY id');
-            return result.rows;
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query('SELECT * FROM roles WHERE COALESCE("Borrado", false) = false ORDER BY id');
+        return result.rows;
     }
 
     getByIdAsync = async (id) => {
-        try {
-            const result = await pool.query('SELECT * FROM roles WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query('SELECT * FROM roles WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
+        return result.rows[0] ?? null;
     }
 
     createAsync = async (entity) => {
-        try {
-            const result = await pool.query(
-                'INSERT INTO roles (tipo_rol) VALUES ($1) RETURNING *',
-                [entity.tipo_rol]
-            );
-            return result.rows[0];
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            'INSERT INTO roles (tipo_rol) VALUES ($1) RETURNING *',
+            [entity.tipo_rol]
+        );
+        return result.rows[0];
     }
 
     updateAsync = async (id, entity) => {
-        try {
-            const result = await pool.query(
-                'UPDATE roles SET tipo_rol = $1 WHERE id = $2 AND COALESCE("Borrado", false) = false RETURNING *',
-                [entity.tipo_rol, id]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            'UPDATE roles SET tipo_rol = $1 WHERE id = $2 AND COALESCE("Borrado", false) = false RETURNING *',
+            [entity.tipo_rol, id]
+        );
+        return result.rows[0] ?? null;
     }
 
     deleteAsync = async (id) => {
-        try {
-            const result = await pool.query('UPDATE roles SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
-            return result.rowCount > 0;
-        } catch (error) { console.error(error); return false; }
+        const result = await pool.query('UPDATE roles SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
+        return result.rowCount > 0;
     }
 }

@@ -44,7 +44,7 @@ mock.module('../src/services/mpService.js', {
   }
 });
 
-const { getAuthorizedPayment, listAuthorizedPayments } = await import('../src/services/paymentReadService.js');
+const { getAuthorizedPayment, listAuthorizedPayments, verifyAuthorizedPayment } = await import('../src/services/paymentReadService.js');
 
 const USERS = {
   adminA: { id: 1, id_rol: 1, id_empresa: 10, id_sede: null },
@@ -166,7 +166,7 @@ test('SQL real sincroniza pago historico propio con NULL y oculta el equivalente
   providerCalls.length = 0;
   writes.length = 0;
 
-  const own = await getAuthorizedPayment(USERS.employeeA, '100');
+  const own = await verifyAuthorizedPayment(USERS.employeeA, '100');
   assert.equal(own.payment.id, '100');
   assert.deepEqual(providerCalls, [['getPayment', '100']]);
   assert.equal(writes.length, 1);
@@ -174,9 +174,27 @@ test('SQL real sincroniza pago historico propio con NULL y oculta el equivalente
   providerCalls.length = 0;
   writes.length = 0;
   await assert.rejects(
+    verifyAuthorizedPayment(USERS.employeeSameSite, '100'),
+    (error) => error.statusCode === 404 && error.code === 'payment_not_found'
+  );
+  assert.deepEqual(providerCalls, []);
+  assert.deepEqual(writes, []);
+});
+
+test('SQL real: la lectura por id y por listado no consulta al proveedor ni escribe', async () => {
+  providerCalls.length = 0;
+  writes.length = 0;
+
+  const own = await getAuthorizedPayment(USERS.employeeA, '100');
+  assert.equal(own.payment.id, '100');
+  assert.equal(own.payment.status, 'approved');
+  const byReference = await listAuthorizedPayments(USERS.superadmin, { external_reference: 'B-PAY' });
+  assert.deepEqual(byReference.results.map((row) => row.id), ['200']);
+  await assert.rejects(
     getAuthorizedPayment(USERS.employeeSameSite, '100'),
     (error) => error.statusCode === 404 && error.code === 'payment_not_found'
   );
+
   assert.deepEqual(providerCalls, []);
   assert.deepEqual(writes, []);
 });

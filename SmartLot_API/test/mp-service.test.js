@@ -2,7 +2,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-const calls = { preference: [], payment: [], merchantOrder: [], refund: [] };
+const calls = { preference: [], payment: [], merchantOrder: [], refund: [], failure: null };
 
 mock.module('mercadopago', {
   namedExports: {
@@ -11,24 +11,25 @@ mock.module('mercadopago', {
     },
     Preference: class {
       constructor(client) { this.client = client; }
-      async create({ body }) { calls.preference.push(body); return { id: 'pref-123', init_point: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref=123', sandbox_init_point: 'https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref=123', external_reference: body.external_reference }; }
+      async create({ body }) { calls.preference.push(body); if (calls.failure) throw calls.failure; return { id: 'pref-123', init_point: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref=123', sandbox_init_point: 'https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref=123', external_reference: body.external_reference }; }
     },
     Payment: class {
       constructor(client) { this.client = client; }
-      async get({ id }) { calls.payment.push({ kind: 'get', id }); return { id, status: 'approved', status_detail: 'accredited', payment_type_id: 'credit_card', transaction_amount: 100, currency_id: 'ARS', external_reference: 'ORD-1', preference_id: 'pref-123', date_approved: new Date().toISOString() }; }
-      async search({ options }) { calls.payment.push({ kind: 'search', options }); return { results: [{ id: 'p-1' }] }; }
+      async get({ id }) { calls.payment.push({ kind: 'get', id }); if (calls.failure) throw calls.failure; return { id, status: 'approved', status_detail: 'accredited', payment_type_id: 'credit_card', transaction_amount: 100, currency_id: 'ARS', external_reference: 'ORD-1', preference_id: 'pref-123', date_approved: new Date().toISOString() }; }
+      async search({ options }) { calls.payment.push({ kind: 'search', options }); if (calls.failure) throw calls.failure; return { results: [{ id: 'p-1' }] }; }
     },
     MerchantOrder: class {
       constructor(client) { this.client = client; }
       async get({ merchantOrderId }) {
         calls.merchantOrder.push(merchantOrderId);
+        if (calls.failure) throw calls.failure;
         return { id: merchantOrderId, preference_id: 'pref-123', payments: [{ id: 123 }] };
       }
     },
     PaymentRefund: class {
       constructor(client) { this.client = client; }
-      async create({ payment_id, body, requestOptions }) { calls.refund.push({ kind: 'partial', payment_id, body, requestOptions }); return { id: 'refund-1', status: 'approved', amount: body.amount }; }
-      async total({ payment_id, requestOptions }) { calls.refund.push({ kind: 'total', payment_id, requestOptions }); return { id: 'refund-1', status: 'approved', amount: 100 }; }
+      async create({ payment_id, body, requestOptions }) { calls.refund.push({ kind: 'partial', payment_id, body, requestOptions }); if (calls.failure) throw calls.failure; return { id: 'refund-1', status: 'approved', amount: body.amount }; }
+      async total({ payment_id, requestOptions }) { calls.refund.push({ kind: 'total', payment_id, requestOptions }); if (calls.failure) throw calls.failure; return { id: 'refund-1', status: 'approved', amount: 100 }; }
     }
   }
 });
@@ -40,6 +41,7 @@ test.beforeEach(() => {
   calls.payment.length = 0;
   calls.merchantOrder.length = 0;
   calls.refund.length = 0;
+  calls.failure = null;
 });
 
 function computeSignature(dataId, requestId, ts, secret) {
@@ -239,4 +241,48 @@ test('searchPayments arma rango con begin/end_date', async () => {
       end_date: '2026-02-01'
     }
   });
+});
+
+// Los errores del SDK traen el status de Mercado Pago. Reenviarlo haría que un 401 del proveedor
+// se lea como sesión vencida en el frontend, así que toda falla del proveedor es un 502 propio.
+const esFallaDelProveedor = (error) => error.statusCode === 502 && error.code === 'MP_UPSTREAM_ERROR'
+  && error.message === 'No se pudo completar la operación con Mercado Pago.';
+
+for (const status of [400, 401, 403, 429, 500, 503]) {
+  test(`un ${status} del SDK de Mercado Pago no se reenvía: todas las operaciones responden 502`, async () => {
+    mock.method(console, 'error', () => {});
+    try {
+      calls.failure = { status, error: 'provider_error', message: 'detalle del proveedor' };
+      await assert.rejects(createPreference([{ title: 'x', unit_price: 1 }], 'ORD-1'), esFallaDelProveedor);
+      await assert.rejects(getPayment('123'), esFallaDelProveedor);
+      await assert.rejects(searchPayments({ external_reference: 'ORD-1' }), esFallaDelProveedor);
+      await assert.rejects(getMerchantOrder('55'), esFallaDelProveedor);
+      await assert.rejects(refundPayment('123', undefined, 'key-1'), esFallaDelProveedor);
+      await assert.rejects(refundPayment('123', 50, 'key-2'), esFallaDelProveedor);
+    } finally { mock.restoreAll(); }
+  });
+}
+
+test('una caída de red del SDK tambien es un 502 y conserva la causa original', async () => {
+  mock.method(console, 'error', () => {});
+  try {
+    const original = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    calls.failure = original;
+    await assert.rejects(getPayment('123'), (error) => esFallaDelProveedor(error) && error.cause === original);
+  } finally { mock.restoreAll(); }
+});
+
+test('getPayment conserva el 404 propio cuando Mercado Pago no conoce el pago', async () => {
+  calls.failure = { status: 404, error: 'not_found', message: 'Payment not found' };
+  await assert.rejects(getPayment('999'), (error) => error.statusCode === 404
+    && error.code === 'payment_not_found' && error.paymentId === '999');
+});
+
+test('el error del proveedor no filtra detalle al cliente: el errorHandler solo ve el mensaje genérico', async () => {
+  mock.method(console, 'error', () => {});
+  try {
+    calls.failure = { status: 401, message: 'invalid access token APP_USR-secreto' };
+    const error = await getPayment('123').catch((e) => e);
+    assert.doesNotMatch(JSON.stringify({ message: error.message, code: error.code }), /APP_USR|secreto|401/);
+  } finally { mock.restoreAll(); }
 });

@@ -6,7 +6,8 @@ import GarageService from './garageService.js';
 import VehiculoService from './vehiculoService.js';
 import { isValidDiaSemana } from '../helpers/validatorHelper.js';
 import CuentaCorrienteRepository from '../repositories/cuentaCorrienteRepository.js';
-import { authorizeWrite, writeError } from '../helpers/writeAuthorization.js';
+import { authorizeWrite } from '../helpers/writeAuthorization.js';
+import { httpError } from '../helpers/httpError.js';
 
 export default class ReservaService {
     constructor() {
@@ -42,13 +43,7 @@ export default class ReservaService {
 
     getControlAccesoAsync = async (id_garage, fecha, requestingUser) => {
         await this._validarAccesoGarageAsync(id_garage, requestingUser);
-        const reservas = await this.repo.getControlAccesoAsync(id_garage, fecha, requestingUser);
-        if (!reservas) {
-            const error = new Error('No se pudieron obtener las reservas para control de acceso.');
-            error.statusCode = 500;
-            throw error;
-        }
-        return reservas;
+        return await this.repo.getControlAccesoAsync(id_garage, fecha, requestingUser);
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
@@ -191,7 +186,7 @@ export default class ReservaService {
 
     usuarioTieneReservasActivasAsync = async (id_usuario) => {
         const reservas = await this.repo.getActivasByUsuarioAsync(id_usuario);
-        return reservas !== null && reservas.length > 0;
+        return reservas.length > 0;
     }
 
     createAsync = async (entity, requestingUser) => {
@@ -305,13 +300,13 @@ export default class ReservaService {
         try {
             await client.query('BEGIN');
             const reserva = await this.repo.getForCancellationAsync(id, scope, client);
-            if (!reserva) throw writeError('Reserva no encontrada.', 404);
+            if (!reserva) throw httpError('Reserva no encontrada.', 404);
             if (reserva.entro && !reserva.salio) {
-                throw writeError(`La reserva con ID ${id} ya registro su ingreso. Debe registrar la salida antes de cancelarla.`, 400);
+                throw httpError(`La reserva con ID ${id} ya registro su ingreso. Debe registrar la salida antes de cancelarla.`, 400);
             }
             const limiteCancelacion = new Date(new Date(reserva.fecha_entrada).getTime() - 30 * 60 * 1000);
             if (new Date() >= limiteCancelacion) {
-                throw writeError(`La reserva con ID ${id} esta demasiado proxima a su inicio para ser cancelada.`, 400);
+                throw httpError(`La reserva con ID ${id} esta demasiado proxima a su inicio para ser cancelada.`, 400);
             }
             const cancelada = await this.repo.cancelarWithClientAsync(id, client, scope);
             if (!cancelada) {
@@ -350,9 +345,9 @@ export default class ReservaService {
         try {
             await client.query('BEGIN');
             const reserva = await this.repo.getForCancellationAsync(id, scope, client);
-            if (!reserva) throw writeError('Reserva no encontrada.', 404);
-            if (reserva.estado_reserva !== 'pendiente_pago') throw writeError('La reserva no esta pendiente de pago.', 409);
-            if (reserva.entro && !reserva.salio) throw writeError('La reserva ya registro su ingreso.', 400);
+            if (!reserva) throw httpError('Reserva no encontrada.', 404);
+            if (reserva.estado_reserva !== 'pendiente_pago') throw httpError('La reserva no esta pendiente de pago.', 409);
+            if (reserva.entro && !reserva.salio) throw httpError('La reserva ya registro su ingreso.', 400);
             const liberada = await this.repo.liberarRetencionWithClientAsync(id, client, scope);
             if (!liberada) {
                 const error = new Error('La retencion ya no esta vigente.');
@@ -573,7 +568,7 @@ export default class ReservaService {
         const aperturaMinutos = apertura[0] * 60 + apertura[1];
         const cierreMinutos = cierre[0] * 60 + cierre[1];
 
-        const reservas = await this.repo.getOverlapByGarageAndDateAsync(garage_id, fecha) || [];
+        const reservas = await this.repo.getOverlapByGarageAndDateAsync(garage_id, fecha);
 
         const horas = [];
         for (let m = aperturaMinutos; m < cierreMinutos; m += 60) {
@@ -813,7 +808,7 @@ export default class ReservaService {
             { time: new Date(entity.fecha_salida), type: -1 }
         ];
 
-        for (const reserva of overlapGarage || []) {
+        for (const reserva of overlapGarage) {
             events.push({ time: new Date(reserva.fecha_entrada), type: 1 });
             events.push({ time: new Date(reserva.fecha_salida), type: -1 });
         }

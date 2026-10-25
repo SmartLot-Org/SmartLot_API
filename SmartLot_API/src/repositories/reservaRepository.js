@@ -132,59 +132,53 @@ export default class ReservaRepository {
     };
 
     getAllAsync = async (requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
-            const result = await pool.query(
-                `SELECT r.* FROM reservas r
-                 INNER JOIN usuarios u ON u.id = r.id_usuario
-                 WHERE COALESCE(r."Borrado", false) = false ${tenant.sql}
-                 ORDER BY r.id`,
-                [...tenant.params]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const result = await pool.query(
+            `SELECT r.* FROM reservas r
+             INNER JOIN usuarios u ON u.id = r.id_usuario
+             WHERE COALESCE(r."Borrado", false) = false ${tenant.sql}
+             ORDER BY r.id`,
+            [...tenant.params]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getControlAccesoAsync = async (id_garage, fecha, requestingUser) => {
-        try {
-            // El acceso del garagista/dueño se valida por usuario_garage; el filtro
-            // de tenant por sede/empresa sigue aplicando a los demas roles.
-            const tenant = getTenantCondition(requestingUser, 3, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', garageColumn: 'r.id_garage' });
-            const result = await pool.query(
-                `SELECT r.*,
-                        CONCAT_WS(' ', u.nombre, u.apellido) AS conductor,
-                        v.patente,
-                        mo.nombre AS modelo_nombre,
-                        ma.nombre AS marca_nombre
-                   FROM reservas r
-                   INNER JOIN usuarios u ON u.id = r.id_usuario
-                   INNER JOIN vehiculos v ON v.id = r.id_vehiculo
-                   LEFT JOIN modelos mo ON mo.id = v.id_modelo
-                   LEFT JOIN marcas ma ON ma.id = mo.id_marca
-                   WHERE r.id_garage = $1
-                     AND COALESCE(r."Borrado", false) = false
-                     AND r.estado_reserva <> 'expirada'
-                     AND (r.fecha_entrada::date = $2::date
-                         OR (COALESCE(r.entro, false) = true AND COALESCE(r.salio, false) = false))
-                    ${tenant.sql}
-                  ORDER BY r.fecha_entrada`,
-                [id_garage, fecha, ...tenant.params]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        // El acceso del garagista/dueño se valida por usuario_garage; el filtro
+        // de tenant por sede/empresa sigue aplicando a los demas roles.
+        const tenant = getTenantCondition(requestingUser, 3, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', garageColumn: 'r.id_garage' });
+        const result = await pool.query(
+            `SELECT r.*,
+                    CONCAT_WS(' ', u.nombre, u.apellido) AS conductor,
+                    v.patente,
+                    mo.nombre AS modelo_nombre,
+                    ma.nombre AS marca_nombre
+               FROM reservas r
+               INNER JOIN usuarios u ON u.id = r.id_usuario
+               INNER JOIN vehiculos v ON v.id = r.id_vehiculo
+               LEFT JOIN modelos mo ON mo.id = v.id_modelo
+               LEFT JOIN marcas ma ON ma.id = mo.id_marca
+               WHERE r.id_garage = $1
+                 AND COALESCE(r."Borrado", false) = false
+                 AND r.estado_reserva <> 'expirada'
+                 AND (r.fecha_entrada::date = $2::date
+                     OR (COALESCE(r.entro, false) = true AND COALESCE(r.salio, false) = false))
+                ${tenant.sql}
+              ORDER BY r.fecha_entrada`,
+            [id_garage, fecha, ...tenant.params]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
-            const result = await pool.query(
-                `SELECT r.* FROM reservas r
-                 INNER JOIN usuarios u ON u.id = r.id_usuario
-                 WHERE r.id = $1 AND COALESCE(r."Borrado", false) = false ${tenant.sql}`,
-                [id, ...tenant.params]
-            );
-            return withoutQrToken(result.rows[0] ?? null);
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const result = await pool.query(
+            `SELECT r.* FROM reservas r
+             INNER JOIN usuarios u ON u.id = r.id_usuario
+             WHERE r.id = $1 AND COALESCE(r."Borrado", false) = false ${tenant.sql}`,
+            [id, ...tenant.params]
+        );
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     getQrByIdAsync = async (id) => {
@@ -224,163 +218,145 @@ export default class ReservaRepository {
     }
 
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
-            const result = await pool.query(
-                `SELECT r.* FROM reservas r
-                 INNER JOIN usuarios u ON u.id = r.id_usuario
-                 WHERE r.id_usuario = $1
-                   AND COALESCE(r."Borrado", false) = false ${tenant.sql}
-                 ORDER BY r.fecha_entrada`,
-                [id_usuario, ...tenant.params]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const result = await pool.query(
+            `SELECT r.* FROM reservas r
+             INNER JOIN usuarios u ON u.id = r.id_usuario
+             WHERE r.id_usuario = $1
+               AND COALESCE(r."Borrado", false) = false ${tenant.sql}
+             ORDER BY r.fecha_entrada`,
+            [id_usuario, ...tenant.params]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getByUsuarioWithDetailsAsync = async (id_usuario, requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
-            const result = await pool.query(
-                `SELECT
-                    r.id,
-                    r.id_usuario,
-                    r.id_garage,
-                    r.id_vehiculo,
-                    to_char(r.fecha_entrada, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS fecha_entrada,
-                    to_char(r.fecha_salida, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS fecha_salida,
-                    to_char(r.fecha_entrada, 'YYYY-MM-DD') AS fecha,
-                    to_char(r.fecha_entrada, 'HH24:MI') AS hora_entrada,
-                    to_char(r.fecha_salida, 'HH24:MI') AS hora_salida,
-                    r.entro,
-                    r.salio,
-                    r.dia,
-                    r."Borrado",
-                    r.modalidad_pago_aplicada,
-                    r.tipo_cupo,
-                    r.responsable_pago,
-                    r.tarifa_hora_aplicada,
-                    r.importe_estimado,
-                    r.estado_reserva,
-                    r.retencion_pago_hasta,
-                    g.nombre AS garage_nombre,
-                    g.piso AS garage_piso,
-                    g.ubicacion AS garage_ubicacion,
-                    v.patente,
-                    mo.nombre AS modelo_nombre,
-                    ma.nombre AS marca_nombre
-                  FROM reservas r
-                  INNER JOIN usuarios u ON u.id = r.id_usuario
-                  LEFT JOIN garages g ON r.id_garage = g.id
-                  LEFT JOIN vehiculos v ON r.id_vehiculo = v.id
-                  LEFT JOIN modelos mo ON v.id_modelo = mo.id
-                  LEFT JOIN marcas ma ON mo.id_marca = ma.id
-                   WHERE r.id_usuario = $1 ${tenant.sql}
-                   ORDER BY r.fecha_entrada DESC`,
-                [id_usuario, ...tenant.params]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const result = await pool.query(
+            `SELECT
+                r.id,
+                r.id_usuario,
+                r.id_garage,
+                r.id_vehiculo,
+                to_char(r.fecha_entrada, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS fecha_entrada,
+                to_char(r.fecha_salida, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS fecha_salida,
+                to_char(r.fecha_entrada, 'YYYY-MM-DD') AS fecha,
+                to_char(r.fecha_entrada, 'HH24:MI') AS hora_entrada,
+                to_char(r.fecha_salida, 'HH24:MI') AS hora_salida,
+                r.entro,
+                r.salio,
+                r.dia,
+                r."Borrado",
+                r.modalidad_pago_aplicada,
+                r.tipo_cupo,
+                r.responsable_pago,
+                r.tarifa_hora_aplicada,
+                r.importe_estimado,
+                r.estado_reserva,
+                r.retencion_pago_hasta,
+                g.nombre AS garage_nombre,
+                g.piso AS garage_piso,
+                g.ubicacion AS garage_ubicacion,
+                v.patente,
+                mo.nombre AS modelo_nombre,
+                ma.nombre AS marca_nombre
+              FROM reservas r
+              INNER JOIN usuarios u ON u.id = r.id_usuario
+              LEFT JOIN garages g ON r.id_garage = g.id
+              LEFT JOIN vehiculos v ON r.id_vehiculo = v.id
+              LEFT JOIN modelos mo ON v.id_modelo = mo.id
+              LEFT JOIN marcas ma ON mo.id_marca = ma.id
+               WHERE r.id_usuario = $1 ${tenant.sql}
+               ORDER BY r.fecha_entrada DESC`,
+            [id_usuario, ...tenant.params]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getActivasByUsuarioAsync = async (id_usuario) => {
-        try {
-            const result = await pool.query(
-                `SELECT * FROM reservas
-                 WHERE id_usuario = $1
-                   AND COALESCE(salio, false) = false
-                   AND COALESCE("Borrado", false) = false
-                 ORDER BY fecha_entrada`,
-                [id_usuario]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT * FROM reservas
+             WHERE id_usuario = $1
+               AND COALESCE(salio, false) = false
+               AND COALESCE("Borrado", false) = false
+             ORDER BY fecha_entrada`,
+            [id_usuario]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getActivasByGarageAsync = async (id_garage) => {
-        try {
-            const result = await pool.query(
-                `SELECT * FROM reservas
-                 WHERE id_garage = $1
-                   AND COALESCE(salio, false) = false
-                   AND COALESCE("Borrado", false) = false
-                 ORDER BY fecha_entrada`,
-                [id_garage]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT * FROM reservas
+             WHERE id_garage = $1
+               AND COALESCE(salio, false) = false
+               AND COALESCE("Borrado", false) = false
+             ORDER BY fecha_entrada`,
+            [id_garage]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getOverlapByVehiculoAsync = async (id_vehiculo, fecha_entrada, fecha_salida, excludeId = null) => {
-        try {
-            const result = await pool.query(
-                `SELECT * FROM reservas
-                  WHERE id_vehiculo = $1
-                    AND fecha_entrada::date = $2::timestamp::date
-                    AND (fecha_entrada < $3::timestamp AND fecha_salida > $2::timestamp)
-                   AND COALESCE(salio, false) = false
-                   AND COALESCE("Borrado", false) = false
-                   AND ($4::integer IS NULL OR id != $4)`,
-                [id_vehiculo, fecha_entrada, fecha_salida, excludeId]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT * FROM reservas
+              WHERE id_vehiculo = $1
+                AND fecha_entrada::date = $2::timestamp::date
+                AND (fecha_entrada < $3::timestamp AND fecha_salida > $2::timestamp)
+               AND COALESCE(salio, false) = false
+               AND COALESCE("Borrado", false) = false
+               AND ($4::integer IS NULL OR id != $4)`,
+            [id_vehiculo, fecha_entrada, fecha_salida, excludeId]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getOverlapByUsuarioAsync = async (id_usuario, fecha_entrada, fecha_salida, excludeId = null) => {
-        try {
-            const result = await pool.query(
-                `SELECT * FROM reservas
-                  WHERE id_usuario = $1
-                    AND fecha_entrada::date = $2::timestamp::date
-                    AND (fecha_entrada < $3::timestamp AND fecha_salida > $2::timestamp)
-                   AND COALESCE(salio, false) = false
-                   AND COALESCE("Borrado", false) = false
-                   AND ($4::integer IS NULL OR id != $4)`,
-                [id_usuario, fecha_entrada, fecha_salida, excludeId]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT * FROM reservas
+              WHERE id_usuario = $1
+                AND fecha_entrada::date = $2::timestamp::date
+                AND (fecha_entrada < $3::timestamp AND fecha_salida > $2::timestamp)
+               AND COALESCE(salio, false) = false
+               AND COALESCE("Borrado", false) = false
+               AND ($4::integer IS NULL OR id != $4)`,
+            [id_usuario, fecha_entrada, fecha_salida, excludeId]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     getOverlapByGarageAsync = async (id_garage, fecha_entrada, fecha_salida, excludeId = null) => {
-        try {
-            const result = await pool.query(
-                `SELECT * FROM reservas
-                 WHERE id_garage = $1
-                   AND fecha_entrada::date = $2::timestamp::date
-                   AND (fecha_entrada < $3::timestamp AND fecha_salida > $2::timestamp)
-                  AND COALESCE(salio, false) = false
-                  AND COALESCE("Borrado", false) = false
-                  AND ($4::integer IS NULL OR id != $4)`,
-                [id_garage, fecha_entrada, fecha_salida, excludeId]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT * FROM reservas
+             WHERE id_garage = $1
+               AND fecha_entrada::date = $2::timestamp::date
+               AND (fecha_entrada < $3::timestamp AND fecha_salida > $2::timestamp)
+              AND COALESCE(salio, false) = false
+              AND COALESCE("Borrado", false) = false
+              AND ($4::integer IS NULL OR id != $4)`,
+            [id_garage, fecha_entrada, fecha_salida, excludeId]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     createAsync = async (entity) => {
-        try {
-            const result = await pool.query(
-                `INSERT INTO reservas (id_usuario, id_garage, id_vehiculo, fecha_entrada, fecha_salida, entro, salio, dia)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-                [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
-                 entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia]
-            );
-            return withoutQrToken(result.rows[0]);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `INSERT INTO reservas (id_usuario, id_garage, id_vehiculo, fecha_entrada, fecha_salida, entro, salio, dia)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+            [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
+             entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia]
+        );
+        return withoutQrToken(result.rows[0]);
     }
 
     updateAsync = async (id, entity) => {
-        try {
-            const result = await pool.query(
-                `UPDATE reservas SET id_usuario=$1, id_garage=$2, id_vehiculo=$3,
-                 fecha_entrada=$4, fecha_salida=$5, entro=$6, salio=$7, dia=$8 WHERE id=$9 AND COALESCE("Borrado", false) = false RETURNING *`,
-                [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
-                 entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia, id]
-            );
-            return withoutQrToken(result.rows[0] ?? null);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `UPDATE reservas SET id_usuario=$1, id_garage=$2, id_vehiculo=$3,
+             fecha_entrada=$4, fecha_salida=$5, entro=$6, salio=$7, dia=$8 WHERE id=$9 AND COALESCE("Borrado", false) = false RETURNING *`,
+            [entity.id_usuario, entity.id_garage, entity.id_vehiculo,
+             entity.fecha_entrada, entity.fecha_salida, entity.entro, entity.salio, entity.dia, id]
+        );
+        return withoutQrToken(result.rows[0] ?? null);
     }
 
     createWithClientAsync = async (entity, client) => {
@@ -461,18 +437,16 @@ export default class ReservaRepository {
     }
 
     getOverlapByGarageAndDateAsync = async (id_garage, fecha) => {
-        try {
-            const result = await pool.query(
-                `SELECT * FROM reservas
-                 WHERE id_garage = $1
-                   AND fecha_entrada::date = $2::date
-                   AND COALESCE(salio, false) = false
-                   AND COALESCE("Borrado", false) = false
-                 ORDER BY fecha_entrada`,
-                [id_garage, fecha]
-            );
-            return withoutQrTokens(result.rows);
-        } catch (error) { console.error(error); return null; }
+        const result = await pool.query(
+            `SELECT * FROM reservas
+             WHERE id_garage = $1
+               AND fecha_entrada::date = $2::date
+               AND COALESCE(salio, false) = false
+               AND COALESCE("Borrado", false) = false
+             ORDER BY fecha_entrada`,
+            [id_garage, fecha]
+        );
+        return withoutQrTokens(result.rows);
     }
 
     deleteAsync = async (id, scope, client = pool) => Boolean(await this.cancelarWithClientAsync(id, client, scope));

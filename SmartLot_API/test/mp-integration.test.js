@@ -107,14 +107,16 @@ test('webhook HTTP valida firma, procesa evento y persiste en la BD', { skip: !c
   assert.equal(pago.rows.length, 1);
 });
 
-test('webhook HTTP con firma invalida responde 400', async () => {
+test('webhook HTTP con firma invalida responde 401 con el payload estandar', async () => {
   const res = await request(app)
     .post('/api/payments/webhook')
+    .query({ 'data.id': '999999' })
     .set('x-signature', 'ts=1,v1=' + 'a'.repeat(64))
     .set('x-request-id', 'req-invalida')
     .send({ id: `mpit-evt-bad-${Date.now()}`, type: 'payment.updated', data: { id: '999999' } });
 
-  assert.equal(res.status, 400);
+  assert.equal(res.status, 401);
+  assert.deepEqual(res.body, { error: true, message: 'Firma de webhook inválida.', statusCode: 401 });
 });
 
 test('webhook HTTP con firma valida pero pago inexistente marca el evento con error', async () => {
@@ -124,8 +126,10 @@ test('webhook HTTP con firma valida pero pago inexistente marca el evento con er
   const manifest = `id:999999;request-id:${requestId};ts:${ts};`;
   const hash = crypto.createHmac('sha256', process.env.MP_WEBHOOK_SECRET).update(manifest).digest('hex');
 
+  // MP firma el data.id de la URL: debe viajar en la query y coincidir con el del cuerpo.
   const res = await request(app)
     .post('/api/payments/webhook')
+    .query({ 'data.id': '999999' })
     .set('x-signature', `ts=${ts},v1=${hash}`)
     .set('x-request-id', requestId)
     .send({ id: eventId, type: 'payment.updated', data: { id: '999999' } });

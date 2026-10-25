@@ -1,44 +1,39 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import UsuarioService from './../services/usuarioService.js';
-import { isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone, isValidStrongPassword } from '../helpers/validatorHelper.js';
+import { idParam, isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone, isValidStrongPassword } from '../helpers/validatorHelper.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
 import { ROLE_NAMES } from '../helpers/roles.js';
 import { requireRole, requireRoleOrSelf } from '../middlewares/rolesMiddleware.js';
 import authRateLimiter from '../middlewares/rateLimiterMiddleware.js';
+import { httpError, throwError } from '../helpers/httpError.js';
 
 const router = Router();
 const svc = new UsuarioService();
 
-function throwError(message, statusCode) {
-    const error = new Error(message);
-    error.statusCode = statusCode;
-    throw error;
-}
+router.param('id', idParam());
+router.param('id_garage', idParam('ID de garage'));
 
 // Nunca exponer el hash de la contraseña en respuestas HTTP.
 function sinContraseña(data) {
     if (Array.isArray(data)) return data.map(sinContraseña);
     if (!data || typeof data !== 'object') return data;
-    const { contraseña, ...usuario } = data;
-    return { ...usuario, limiteReservasActivas: usuario.limite_reservas_activas ?? null };
+    const { contraseña, limite_reservas_activas, ...usuario } = data;
+    return { ...usuario, limiteReservasActivas: limite_reservas_activas ?? null };
 }
 
 // GET ALL (admin o smartlot)
 router.get('', authMiddleware, requireRole(1, 4), async (req, res) => {
     const data = await svc.getAllAsync(req.usuario);
-    if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(sinContraseña(data));
 });
 
 // GET BY GARAGE ID (admin, smartlot o garagista)
 router.get('/garage/:id_garage', authMiddleware, requireRole(1, 3, 4, 'dueño_garage'), async (req, res) => {
-    const idGarage = parseInt(req.params.id_garage);
-    if (isNaN(idGarage)) throwError('El ID de garage proporcionado no es válido.', 400);
+    const idGarage = req.params.id_garage;
 
     const data = await svc.getGaragistasByGarageIdAsync(idGarage, req.usuario);
-    if (!data) throwError('No encontrado.', 404);
     res.status(200).json(sinContraseña(data));
 });
 
@@ -81,11 +76,10 @@ router.post('/login', authRateLimiter, async (req, res) => {
         expires_in: '15m'
     });
 }, (err, req, res, next) => {
-    // Solo login: un fallo interno tampoco debe borrar las cookies de una sesión previa.
+    // Solo login: un error de la base se responde siempre como 500 genérico
+    // (SEG-10A), sin traducirlo a 4xx ni dar pistas sobre la cuenta.
     if ((err?.statusCode || err?.status || 500) === 500) {
-        return next(Object.assign(new Error('Error interno del servidor'), {
-            statusCode: 500, preserveAuthCookies: true
-        }));
+        return next(httpError('Error interno del servidor'));
     }
     next(err);
 });
@@ -121,9 +115,13 @@ router.post('/refresh', authRateLimiter, async (req, res) => {
             expires_in: '15m'
         });
     } catch (err) {
-        res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
-        res.clearCookie('refresh_session_id', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/api/usuario/refresh' });
-        throwError(err.message, err.statusCode || 401);
+        // Solo una sesión rechazada (error de dominio, 4xx) se descarta. Un fallo
+        // interno, como la base caída, no dice nada de la sesión y la deja viva.
+        if (err.statusCode && err.statusCode < 500) {
+            res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
+            res.clearCookie('refresh_session_id', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/api/usuario/refresh' });
+        }
+        throw err;
     }
 });
 
@@ -264,14 +262,12 @@ router.get('/me', authMiddleware, (req, res) => {
 // GET BY ID (admin, smartlot o el propio usuario)
 router.get('/auditoria', authMiddleware, requireRole(4), async (req, res) => {
     const data = await svc.getAuditAsync();
-    if (!data) throwError('Error interno del servidor', 500);
     res.status(200).json(data);
 });
 
 // GET BY ID (admin, smartlot o el propio usuario)
 router.get('/:id', authMiddleware, async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) throwError('El ID proporcionado no es válido.', 400);
+    const { id } = req.params;
 
     const rol = Number(req.usuario.id_rol);
     const esAdminOSmartlot = rol === 1 || rol === 4;
@@ -307,7 +303,6 @@ router.post('/register', authRateLimiter, async (req, res) => {
         id_empresa: null,
         activo: true
     });
-    if (!data) throwError('Error interno al crear el usuario.', 500);
     const { contraseña: _hash, ...usuarioSinContraseña } = data;
     res.status(201).json(usuarioSinContraseña);
 });
@@ -345,7 +340,6 @@ router.post('/register-dueno-garage', authRateLimiter, async (req, res) => {
         id_empresa: null,
         activo: true
     });
-    if (!data) throwError('Error interno al crear el usuario.', 500);
 
     const login = await svc.loginAsync({ email: String(email).trim().toLowerCase(), contraseña });
 
@@ -456,15 +450,13 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
         throwError('El límite de reservas solo se configura para empleados.', 400);
     }
     const data = await svc.createAsync(req.body);
-    if (!data) throwError('Error interno al crear el usuario.', 500);
     const { contraseña: hashCreado, ...usuarioCreado } = data;
     res.status(201).json(sinContraseña(usuarioCreado));
 });
 
 router.patch('/:id/limite-reservas', authMiddleware, requireRole(1, 4, ROLE_NAMES.ADMIN, ROLE_NAMES.SUPERADMIN), async (req, res) => {
-    if (!isValidId(req.params.id)) throwError('El ID proporcionado no es válido.', 400);
     const limit = validateReservationLimit(req.body?.limiteReservasActivas);
-    res.status(200).json(await svc.updateReservationLimitAsync(Number(req.params.id), limit, req.usuario));
+    res.status(200).json(await svc.updateReservationLimitAsync(req.params.id, limit, req.usuario));
 });
 
 // UPDATE (PUT) - admin, smartlot o el propio usuario
@@ -480,23 +472,22 @@ router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), asy
     if (email && !isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
     if (contraseña && !isValidPassword(contraseña)) throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
 
-    const data = await svc.updateAsync(parseInt(id, 10), req.body, req.usuario);
+    const data = await svc.updateAsync(id, req.body, req.usuario);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
     res.status(200).json(sinContraseña(data));
 });
 
-// UPDATE CONTRASEÑA (PATCH) - admin, smartlot o el propio usuario
-router.patch(['/:id/contraseña', '/:id/contrasenia', '/:id/contrase%C3%B1a'], authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
-    const id = req.params.id;
-
-    if (!isValidId(id)) throwError('El ID proporcionado no es válido.', 400);
+// UPDATE CONTRASEÑA (PATCH) - admin, smartlot o el propio usuario.
+// La ruta canónica es ASCII: un segmento con ñ viaja percent-encoded y obligaba a mantener alias.
+router.patch('/:id/contrasenia', authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
+    const { id } = req.params;
 
     const { contraseña } = req.body;
     if (!contraseña || !isValidPassword(contraseña)) {
         throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
     }
 
-    const data = await svc.updateContraseñaAsync(parseInt(id, 10), contraseña, req.usuario);
+    const data = await svc.updateContraseñaAsync(id, contraseña, req.usuario);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
     res.status(200).json({ message: 'Contraseña actualizada exitosamente.' });
 });
@@ -512,7 +503,7 @@ router.patch('/:id/estado', authMiddleware, requireRole(1, 4), async (req, res) 
         throwError('El campo "activo" es requerido y debe ser un valor booleano (true/false).', 400);
     }
 
-    const data = await svc.updateEstadoAsync(parseInt(id, 10), activo, req.usuario);
+    const data = await svc.updateEstadoAsync(id, activo, req.usuario);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
     res.status(200).json(sinContraseña(data));
 });
@@ -523,7 +514,7 @@ router.delete('/:id', authMiddleware, requireRole(1, 4), async (req, res) => {
 
     if (!isValidId(id)) throwError('El ID proporcionado no es válido.', 400);
 
-    const ok = await svc.deleteAsync(parseInt(id, 10), req.usuario);
+    const ok = await svc.deleteAsync(id, req.usuario);
     if (!ok) throwError('No encontrado: El usuario con ese ID no existe.', 404);
     res.status(200).json({ message: 'Usuario eliminado exitosamente.' });
 });

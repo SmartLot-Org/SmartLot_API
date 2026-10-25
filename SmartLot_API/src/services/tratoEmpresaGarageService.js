@@ -7,8 +7,7 @@ import SolicitudEmpresaGarageService from './solicitudEmpresaGarageService.js';
 import NotificacionService from '../services/NotificacionService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import pool from '../database/db.js';
-
-const fail = (message, statusCode) => { throw Object.assign(new Error(message), { statusCode }); };
+import { throwError } from '../helpers/httpError.js';
 
 const ROL_LABEL = { admin: 'admin', superadmin: 'superadmin' };
 const PAYMENT_MODALITIES = new Set(['empresa_cubre_cupo', 'empleado_paga_todo']);
@@ -68,12 +67,12 @@ export default class TratoEmpresaGarageService {
 
     getByIdAsync = async (id, usuario) => {
         const row = await this.repo.getByIdAsync(id);
-        if (!row) fail('El trato no existe.', 404);
-        if (!await this._canAccessAsync(usuario, row)) fail('No tiene acceso a este trato.', 403);
+        if (!row) throwError('El trato no existe.', 404);
+        if (!await this._canAccessAsync(usuario, row)) throwError('No tiene acceso a este trato.', 403);
         return row;
     };
     getByEmpresaAsync = async (idEmpresa, usuario) => {
-        if (!hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN) && Number(usuario.id_empresa) !== Number(idEmpresa)) fail('No tiene acceso a esta empresa.', 403);
+        if (!hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN) && Number(usuario.id_empresa) !== Number(idEmpresa)) throwError('No tiene acceso a esta empresa.', 403);
         return this.repo.getByEmpresaAsync(idEmpresa, usuario.id_sede || null);
     };
     getByGarageAsync = async (idGarage, usuario) => {
@@ -84,28 +83,28 @@ export default class TratoEmpresaGarageService {
     };
 
     createAsync = async (input, usuario) => {
-        if (!hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) fail('Los tratos se crean aceptando una solicitud.', 403);
+        if (!hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) throwError('Los tratos se crean aceptando una solicitud.', 403);
         const idSede = Number(input.id_sede);
         const idGarage = Number(input.id_garage);
         const cantidad = Number(input.cantidad_cocheras);
         const modalidadPago = input.modalidad_pago || 'empresa_cubre_cupo';
-        if (![idSede, idGarage, cantidad].every(Number.isInteger) || Math.min(idSede,idGarage,cantidad) <= 0) fail('Sede, garage y cantidad deben ser enteros positivos.', 400);
-        if (usuario.id_sede && Number(usuario.id_sede) !== idSede) fail('No puede operar con otra sede.', 403);
+        if (![idSede, idGarage, cantidad].every(Number.isInteger) || Math.min(idSede,idGarage,cantidad) <= 0) throwError('Sede, garage y cantidad deben ser enteros positivos.', 400);
+        if (usuario.id_sede && Number(usuario.id_sede) !== idSede) throwError('No puede operar con otra sede.', 403);
         const sede = await this.sedeService.getByIdAsync(idSede);
-        if (!sede) fail('La sede no existe o esta inactiva.', 404);
-        if (await this.repo.getBySedeGarageAsync(idSede, idGarage)) fail('Ya existe un trato para esa sede y garage.', 409);
-        if (!PAYMENT_MODALITIES.has(modalidadPago)) fail('modalidad_pago no es valida.', 400);
+        if (!sede) throwError('La sede no existe o esta inactiva.', 404);
+        if (await this.repo.getBySedeGarageAsync(idSede, idGarage)) throwError('Ya existe un trato para esa sede y garage.', 409);
+        if (!PAYMENT_MODALITIES.has(modalidadPago)) throwError('modalidad_pago no es valida.', 400);
         return this.repo.createAgreementAsync({ id_sede: idSede, id_garage: idGarage, cantidad_cocheras: cantidad, modalidad_pago: modalidadPago });
     };
 
     updateAsync = async (id, changes, usuario) => {
         const current = await this.getByIdAsync(id, usuario);
         if (current.id_sede_propia !== null && current.id_sede_propia !== undefined) {
-            fail('La cantidad de cocheras del garage propio se define en su capacidad de reservas.', 409);
+            throwError('La cantidad de cocheras del garage propio se define en su capacidad de reservas.', 409);
         }
-        if (!this._adminCanManage(usuario, current)) fail('No puede modificar este trato.', 403);
+        if (!this._adminCanManage(usuario, current)) throwError('No puede modificar este trato.', 403);
         const cantidad = Number(changes.cantidad_cocheras);
-        if (!Number.isInteger(cantidad) || cantidad <= 0) fail('cantidad_cocheras debe un entero mayor que 0.', 400);
+        if (!Number.isInteger(cantidad) || cantidad <= 0) throwError('cantidad_cocheras debe un entero mayor que 0.', 400);
 
         // Superadmin: actualiza directamente (comportamiento original)
         if (hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN)) {
@@ -133,17 +132,17 @@ export default class TratoEmpresaGarageService {
         return { ...solicitud, tipo: 'solicitud_modificacion' };
     };
     updatePaymentModalityAsync = async (id, modalidad, usuario) => {
-        if (!PAYMENT_MODALITIES.has(modalidad)) fail('modalidadPago no es valida.', 400);
+        if (!PAYMENT_MODALITIES.has(modalidad)) throwError('modalidadPago no es valida.', 400);
         const current = await this.getByIdAsync(id, usuario);
-        if (!this._adminCanManage(usuario, current)) fail('No puede modificar la modalidad de este trato.', 403);
+        if (!this._adminCanManage(usuario, current)) throwError('No puede modificar la modalidad de este trato.', 403);
         return this.repo.updatePaymentModalityAsync(id, modalidad, usuario.id);
     };
     cancelAsync = async (id, usuario) => {
         const current = await this.getByIdAsync(id, usuario);
         if (current.id_sede_propia !== null && current.id_sede_propia !== undefined) {
-            fail('El garage propio debe permanecer vinculado a su sede.', 409);
+            throwError('El garage propio debe permanecer vinculado a su sede.', 409);
         }
-        if (!this._adminCanManage(usuario, current)) fail('No puede cancelar este trato.', 403);
+        if (!this._adminCanManage(usuario, current)) throwError('No puede cancelar este trato.', 403);
         // Notificar a los dueños del garage (best-effort, try/catch)
         try {
             const rol = ROL_LABEL[usuario?.tipo_rol] ?? 'admin';

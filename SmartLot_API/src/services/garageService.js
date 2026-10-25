@@ -6,7 +6,8 @@ import pool from '../database/db.js';
 import UsuarioGarageService from './usuarioGarageService.js';
 import { hasRole, ROLE_NAMES } from '../helpers/roles.js';
 import { authorizeGarageOccupancy } from '../helpers/garageOccupancyAuthorization.js';
-import { writeError } from '../helpers/writeAuthorization.js';
+import { httpError, throwError } from '../helpers/httpError.js';
+import { BAD_REQUEST } from '../helpers/httpStatus.js';
 
 export default class GarageService {
     constructor() {
@@ -39,19 +40,18 @@ export default class GarageService {
         this._validarDiasGarage(entity);
         const { id_dueno, id_garagistas = [], ...garageData } = entity;
         const esSuperadmin = hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN);
-        const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
         if (!Array.isArray(id_garagistas) || id_garagistas.some(id => !Number.isSafeInteger(id) || id <= 0)) {
-            fail('id_garagistas debe ser una lista de IDs enteros positivos.');
+            throwError('id_garagistas debe ser una lista de IDs enteros positivos.', BAD_REQUEST);
         }
         if (id_dueno !== undefined && (!Number.isSafeInteger(id_dueno) || id_dueno <= 0)) {
-            fail('id_dueno debe ser un entero positivo.');
+            throwError('id_dueno debe ser un entero positivo.', BAD_REQUEST);
         }
         if (!esSuperadmin && (id_dueno !== undefined || id_garagistas.length)) {
-            fail('Solo el superadmin puede asignar dueño y garagistas al crear el garage.', 403);
+            throwError('Solo el superadmin puede asignar dueño y garagistas al crear el garage.', 403);
         }
         const ownerId = esSuperadmin ? id_dueno : hasRole(usuario, ROLE_NAMES.DUENO_GARAGE) ? usuario.id : undefined;
         const staffIds = [...new Set(id_garagistas)];
-        if (!ownerId && staffIds.length) fail('Selecciona un dueño para asignar garagistas.');
+        if (!ownerId && staffIds.length) throwError('Selecciona un dueño para asignar garagistas.', BAD_REQUEST);
         if (!ownerId) return await this.repo.createAsync(garageData);
         const client = await this.pool.connect();
         try {
@@ -62,7 +62,7 @@ export default class GarageService {
                         `SELECT u.id FROM usuarios u JOIN roles r ON r.id = u.id_rol
                          WHERE u.id = $1 AND lower(trim(r.tipo_rol)) = $2
                          AND COALESCE(u."Borrado", false) = false FOR SHARE OF u, r`, [id, role]);
-                    if (!result.rows.length) fail(`El usuario ${id} no existe o no tiene el rol ${role}.`);
+                    if (!result.rows.length) throwError(`El usuario ${id} no existe o no tiene el rol ${role}.`, BAD_REQUEST);
                 }
             }
             const garage = await this.repo.createWithClientAsync(garageData, client);
@@ -80,36 +80,35 @@ export default class GarageService {
     }
 
     createPropioAsync = async (entity, usuario) => {
-        const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
         const esSuperadmin = hasRole(usuario, 4, ROLE_NAMES.SUPERADMIN);
         if (!esSuperadmin && !hasRole(usuario, 1, ROLE_NAMES.ADMIN)) {
-            fail('Solo un administrador puede crear un garage propio.', 403);
+            throwError('Solo un administrador puede crear un garage propio.', 403);
         }
 
         const idSede = Number(entity?.id_sede);
-        if (!Number.isInteger(idSede) || idSede <= 0) fail('id_sede debe ser un entero positivo.');
+        if (!Number.isInteger(idSede) || idSede <= 0) throwError('id_sede debe ser un entero positivo.', BAD_REQUEST);
 
         const sede = await this.sedeService.getByIdAsync(idSede, usuario);
-        if (!sede) fail('La sede no existe o no tienes permisos sobre ella.', 404);
+        if (!sede) throwError('La sede no existe o no tienes permisos sobre ella.', 404);
         if (!esSuperadmin) {
             if (Number(sede.id_empresa) !== Number(usuario?.id_empresa)) {
-                fail('La sede no pertenece a tu empresa.', 403);
+                throwError('La sede no pertenece a tu empresa.', 403);
             }
             if (usuario?.id_sede && Number(usuario.id_sede) !== Number(sede.id)) {
-                fail('No puedes crear un garage propio para otra sede.', 403);
+                throwError('No puedes crear un garage propio para otra sede.', 403);
             }
         }
         if (typeof sede.ubicacion !== 'string' || !sede.ubicacion.trim()) {
-            fail('La sede debe tener una dirección registrada para crear su garage propio.', 409);
+            throwError('La sede debe tener una dirección registrada para crear su garage propio.', 409);
         }
 
         const capacidadReservas = Number(entity.capacidad_reservas);
         const capacidadNoReservas = Number(entity.capacidad_para_no_reservas);
         if (!Number.isInteger(capacidadReservas) || capacidadReservas < 1 || capacidadReservas > 32767) {
-            fail('La capacidad de reservas debe ser un entero entre 1 y 32767.');
+            throwError('La capacidad de reservas debe ser un entero entre 1 y 32767.', BAD_REQUEST);
         }
         if (!Number.isInteger(capacidadNoReservas) || capacidadNoReservas < 0) {
-            fail('La capacidad para no reservas debe ser un entero mayor o igual a 0.');
+            throwError('La capacidad para no reservas debe ser un entero mayor o igual a 0.', BAD_REQUEST);
         }
 
         const garageData = {
@@ -130,7 +129,7 @@ export default class GarageService {
             dias: entity.dias,
             id_sede_propia: sede.id,
         };
-        if (!garageData.nombre) fail('El nombre es requerido.');
+        if (!garageData.nombre) throwError('El nombre es requerido.', BAD_REQUEST);
 
         this._validarPrecios(garageData);
         for (const [campo, precio] of Object.entries({
@@ -139,14 +138,14 @@ export default class GarageService {
             precio_moto: garageData.precio_moto,
         })) {
             if (precio !== null && precio !== undefined && !Number.isInteger(precio)) {
-                fail(`${campo} debe expresarse en pesos enteros.`);
+                throwError(`${campo} debe expresarse en pesos enteros.`, BAD_REQUEST);
             }
         }
         this._validarDiasGarage(garageData);
         await this._validarRelacionesAsync(garageData);
 
         if (await this.repo.getPropioBySedeAsync(idSede)) {
-            fail('Esta sede ya tiene un garage propio.', 409);
+            throwError('Esta sede ya tiene un garage propio.', 409);
         }
 
         const client = await this.pool.connect();
@@ -170,7 +169,7 @@ export default class GarageService {
             return garage;
         } catch (error) {
             await client.query('ROLLBACK');
-            if (error.code === '23505') fail('Esta sede ya tiene un garage propio.', 409);
+            if (error.code === '23505') throwError('Esta sede ya tiene un garage propio.', 409);
             throw error;
         } finally {
             client.release();
@@ -237,31 +236,31 @@ export default class GarageService {
 
     _changeNoReservationOccupancy = async (id, actor, entering) => {
         const scope = authorizeGarageOccupancy(actor);
-        if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) throw writeError('El ID proporcionado no es valido.', 400);
+        if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) throw httpError('El ID proporcionado no es valido.', 400);
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
             // La identidad y el contexto se mantienen estables hasta el COMMIT.
             if (!await this.repo.lockOccupancyActorAsync(scope, client)) {
-                throw writeError('La sesion o su contexto cambiaron. Autentiquese nuevamente.', 401);
+                throw httpError('La sesion o su contexto cambiaron. Autentiquese nuevamente.', 401);
             }
             const garage = await this.repo.getForNoReservationOccupancyAsync(id, scope, client);
-            if (!garage) throw writeError('Garage no encontrado.', 404);
+            if (!garage) throw httpError('Garage no encontrado.', 404);
             if (entering) {
                 const totalCap = Number(garage.capacidad ?? 0);
                 const capNoRes = Number(garage.capacidad_para_no_reservas ?? totalCap);
                 const currentNoRes = Number(garage.ocupacion_no_reservas ?? 0);
                 const currentRes = Number(garage.ocupacion_reservas ?? 0);
                 if (currentNoRes >= capNoRes) {
-                    throw writeError(`Se superó la capacidad máxima para vehículos sin reserva (${capNoRes}).`, 400);
+                    throw httpError(`Se superó la capacidad máxima para vehículos sin reserva (${capNoRes}).`, 400);
                 }
                 if (currentNoRes + currentRes >= totalCap) {
-                    throw writeError(`El garage está completamente lleno (capacidad total: ${totalCap}).`, 400);
+                    throw httpError(`El garage está completamente lleno (capacidad total: ${totalCap}).`, 400);
                 }
             }
             const updated = entering ? await this.repo.incrementOcupacionNoReservasAsync(id, scope, client) :
                 await this.repo.decrementOcupacionNoReservasAsync(id, scope, client);
-            if (!updated) throw writeError('La ocupacion o el permiso cambiaron durante la operacion.', 409);
+            if (!updated) throw httpError('La ocupacion o el permiso cambiaron durante la operacion.', 409);
             await client.query('COMMIT');
             return updated;
         } catch (error) {

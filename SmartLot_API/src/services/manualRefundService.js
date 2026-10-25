@@ -3,22 +3,16 @@ import pool from '../database/db.js';
 import { getPayment, refundPayment } from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
 import { CONFIRMED_REFUND_STATUSES, readProviderRefundState } from './paymentRefundState.js';
-
-function fail(message, statusCode, code) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  error.code = code;
-  throw error;
-}
+import { throwError } from '../helpers/httpError.js';
 
 function moneyToCents(value, fieldName) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) {
-    fail(`${fieldName} no es un importe valido.`, 409, 'inconsistent_payment');
+    throwError(`${fieldName} no es un importe valido.`, 409, 'inconsistent_payment');
   }
   const cents = Math.round(number * 100);
   if (Math.abs(number * 100 - cents) > 1e-7) {
-    fail(`${fieldName} tiene mas de dos decimales.`, 409, 'inconsistent_payment');
+    throwError(`${fieldName} tiene mas de dos decimales.`, 409, 'inconsistent_payment');
   }
   return cents;
 }
@@ -26,21 +20,21 @@ function moneyToCents(value, fieldName) {
 function parseRequestedAmount(value, wasProvided) {
   if (!wasProvided) return null;
   if (typeof value !== 'number' && typeof value !== 'string') {
-    fail('amount debe ser un importe numerico positivo.', 400, 'invalid_refund_amount');
+    throwError('amount debe ser un importe numerico positivo.', 400, 'invalid_refund_amount');
   }
 
   const normalized = typeof value === 'string' ? value.trim() : value;
   if (normalized === '' || (typeof normalized === 'string' && !/^\d+(?:\.\d{1,2})?$/.test(normalized))) {
-    fail('amount debe ser un importe numerico positivo con hasta dos decimales.', 400, 'invalid_refund_amount');
+    throwError('amount debe ser un importe numerico positivo con hasta dos decimales.', 400, 'invalid_refund_amount');
   }
 
   const number = Number(normalized);
   if (!Number.isFinite(number) || number <= 0) {
-    fail('amount debe ser un importe numerico positivo.', 400, 'invalid_refund_amount');
+    throwError('amount debe ser un importe numerico positivo.', 400, 'invalid_refund_amount');
   }
   const cents = Math.round(number * 100);
   if (Math.abs(number * 100 - cents) > 1e-7) {
-    fail('amount debe tener como maximo dos decimales.', 400, 'invalid_refund_amount');
+    throwError('amount debe tener como maximo dos decimales.', 400, 'invalid_refund_amount');
   }
   return cents;
 }
@@ -48,24 +42,24 @@ function parseRequestedAmount(value, wasProvided) {
 function parseMetadata(value) {
   if (!value) return {};
   if (typeof value === 'object' && !Array.isArray(value)) return value;
-  if (typeof value !== 'string') fail('El pago local tiene metadata invalida.', 409, 'inconsistent_payment');
+  if (typeof value !== 'string') throwError('El pago local tiene metadata invalida.', 409, 'inconsistent_payment');
   try {
     const parsed = JSON.parse(value);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid metadata');
     return parsed;
   } catch {
-    fail('El pago local tiene metadata invalida.', 409, 'inconsistent_payment');
+    throwError('El pago local tiene metadata invalida.', 409, 'inconsistent_payment');
   }
 }
 
 function normalizeIdList(value) {
   if (value === undefined) return null;
   if (!Array.isArray(value) || value.length === 0) {
-    fail('Las referencias de consumos del pago son insuficientes.', 409, 'inconsistent_payment');
+    throwError('Las referencias de consumos del pago son insuficientes.', 409, 'inconsistent_payment');
   }
   const ids = [...new Set(value.map(Number))];
   if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
-    fail('Las referencias de consumos del pago son invalidas.', 409, 'inconsistent_payment');
+    throwError('Las referencias de consumos del pago son invalidas.', 409, 'inconsistent_payment');
   }
   return ids;
 }
@@ -86,29 +80,29 @@ async function resolveLocalPayment(paymentId) {
   );
 
   const payment = result.rows[0];
-  if (!payment) fail('El pago no esta registrado en SmartLot.', 404, 'payment_not_found_local');
+  if (!payment) throwError('El pago no esta registrado en SmartLot.', 404, 'payment_not_found_local');
 
   const metadata = parseMetadata(payment.metadata);
   const metadataReservationId = metadata.id_reserva === undefined ? null : Number(metadata.id_reserva);
 
   if (payment.id_reserva !== null && payment.id_reserva !== undefined) {
     if (!payment.linked_reservation_id) {
-      fail('La reserva vinculada al pago no existe.', 409, 'inconsistent_payment');
+      throwError('La reserva vinculada al pago no existe.', 409, 'inconsistent_payment');
     }
     if (metadataReservationId !== null && metadataReservationId !== Number(payment.id_reserva)) {
-      fail('Las referencias de reserva del pago se contradicen.', 409, 'inconsistent_payment');
+      throwError('Las referencias de reserva del pago se contradicen.', 409, 'inconsistent_payment');
     }
     if (payment.id_empresa !== null && payment.id_empresa !== undefined &&
         payment.reservation_company_id !== null && payment.reservation_company_id !== undefined &&
         Number(payment.id_empresa) !== Number(payment.reservation_company_id)) {
-      fail('La empresa del pago no coincide con la reserva vinculada.', 409, 'inconsistent_payment');
+      throwError('La empresa del pago no coincide con la reserva vinculada.', 409, 'inconsistent_payment');
     }
   } else if (metadataReservationId !== null) {
-    fail('El pago declara una reserva sin una relacion local persistida.', 409, 'inconsistent_payment');
+    throwError('El pago declara una reserva sin una relacion local persistida.', 409, 'inconsistent_payment');
   }
 
   if (payment.id_empresa !== null && payment.id_empresa !== undefined && !payment.linked_company_id) {
-    fail('La empresa vinculada al pago no existe.', 409, 'inconsistent_payment');
+    throwError('La empresa vinculada al pago no existe.', 409, 'inconsistent_payment');
   }
 
   const consumoIds = normalizeIdList(metadata.consumos_ids);
@@ -121,15 +115,15 @@ async function resolveLocalPayment(paymentId) {
       [consumoIds]
     );
     if (consumosResult.rows.length !== consumoIds.length) {
-      fail('Uno o mas consumos vinculados al pago no existen.', 409, 'inconsistent_payment');
+      throwError('Uno o mas consumos vinculados al pago no existen.', 409, 'inconsistent_payment');
     }
     if (payment.id_empresa === null || payment.id_empresa === undefined ||
         consumosResult.rows.some((row) => Number(row.id_empresa) !== Number(payment.id_empresa))) {
-      fail('Los consumos vinculados no pertenecen a la empresa registrada en el pago.', 409, 'inconsistent_payment');
+      throwError('Los consumos vinculados no pertenecen a la empresa registrada en el pago.', 409, 'inconsistent_payment');
     }
     if (payment.id_reserva !== null && payment.id_reserva !== undefined &&
         !consumosResult.rows.some((row) => Number(row.id_reserva) === Number(payment.id_reserva))) {
-      fail('La reserva del pago no coincide con sus consumos vinculados.', 409, 'inconsistent_payment');
+      throwError('La reserva del pago no coincide con sus consumos vinculados.', 409, 'inconsistent_payment');
     }
   }
 
@@ -137,7 +131,7 @@ async function resolveLocalPayment(paymentId) {
   const hasConsumptionLinks = Boolean(consumoIds);
   const hasProviderCorrelation = Boolean(payment.mp_preference_id && payment.id_orden_externa);
   if (!hasReservationLink && !hasConsumptionLinks && !hasProviderCorrelation) {
-    fail('El pago local no tiene referencias suficientes para autorizar un reembolso.', 409, 'inconsistent_payment');
+    throwError('El pago local no tiene referencias suficientes para autorizar un reembolso.', 409, 'inconsistent_payment');
   }
 
   return { ...payment, metadata, consumoIds };
@@ -178,16 +172,16 @@ function idempotentResponse(refund) {
 
 async function validateProviderPayment(localPayment, providerPayment, paymentId) {
   if (!await providerPaymentMatchesLocal(providerPayment, localPayment, paymentId)) {
-    fail('Mercado Pago devolvio un recurso distinto al pago local.', 409, 'inconsistent_payment');
+    throwError('Mercado Pago devolvio un recurso distinto al pago local.', 409, 'inconsistent_payment');
   }
 
   const localAmount = moneyToCents(localPayment.monto, 'El monto local');
   const providerAmount = moneyToCents(providerPayment.transaction_amount, 'El monto de Mercado Pago');
   if (localAmount !== providerAmount) {
-    fail('El monto local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
+    throwError('El monto local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
   }
   if (String(localPayment.moneda || '') !== String(providerPayment.currency_id || '')) {
-    fail('La moneda local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
+    throwError('La moneda local no coincide con Mercado Pago.', 409, 'inconsistent_payment');
   }
   return localAmount;
 }
@@ -195,7 +189,7 @@ async function validateProviderPayment(localPayment, providerPayment, paymentId)
 function providerRefundState(providerPayment) {
   const state = readProviderRefundState(providerPayment);
   if (!state.known || !state.valid) {
-    fail(
+    throwError(
       'Mercado Pago no informo un saldo reembolsable consistente.',
       409,
       'inconsistent_provider_refund_state'
@@ -238,7 +232,7 @@ async function persistConfirmedRefund({ localPayment, refund, actualCents, motiv
         localPayment.id
       ]
     );
-    if (!update.rows[0]) fail('El pago local dejo de estar disponible.', 409, 'payment_changed');
+    if (!update.rows[0]) throwError('El pago local dejo de estar disponible.', 409, 'payment_changed');
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -251,12 +245,12 @@ async function persistConfirmedRefund({ localPayment, refund, actualCents, motiv
 export async function executeManualRefund({ paymentId, amount, amountProvided, motivo, actorUserId }) {
   const normalizedPaymentId = String(paymentId || '').trim();
   if (!/^\d+$/.test(normalizedPaymentId)) {
-    fail('paymentId debe ser el identificador numerico de Mercado Pago.', 400, 'invalid_payment_id');
+    throwError('paymentId debe ser el identificador numerico de Mercado Pago.', 400, 'invalid_payment_id');
   }
 
   const requestedCents = parseRequestedAmount(amount, amountProvided);
   if (motivo !== undefined && (typeof motivo !== 'string' || motivo.trim().length > 255)) {
-    fail('motivo debe ser texto de hasta 255 caracteres.', 400, 'invalid_refund_reason');
+    throwError('motivo debe ser texto de hasta 255 caracteres.', 400, 'invalid_refund_reason');
   }
 
   const localPayment = await resolveLocalPayment(normalizedPaymentId);
@@ -272,18 +266,18 @@ export async function executeManualRefund({ paymentId, amount, amountProvided, m
   const localTotalCents = moneyToCents(localPayment.monto, 'El monto local');
   if (locallyRefundedCents >= localTotalCents) {
     if (confirmedRefunds[0]) return idempotentResponse(confirmedRefunds[0]);
-    fail('El pago ya fue reembolsado totalmente.', 409, 'payment_already_refunded');
+    throwError('El pago ya fue reembolsado totalmente.', 409, 'payment_already_refunded');
   }
 
   const providerPayment = await getPayment(normalizedPaymentId);
   const totalCents = await validateProviderPayment(localPayment, providerPayment, normalizedPaymentId);
   const providerStatus = String(providerPayment.status || '').toLowerCase();
   if (!['approved', 'partially_refunded'].includes(providerStatus) && providerStatus !== 'refunded') {
-    fail('El pago no esta en un estado reembolsable confirmado por Mercado Pago.', 409, 'payment_not_refundable');
+    throwError('El pago no esta en un estado reembolsable confirmado por Mercado Pago.', 409, 'payment_not_refundable');
   }
   const refundState = providerRefundState(providerPayment);
   if (providerStatus === 'refunded' && refundState.classification === 'none') {
-    fail(
+    throwError(
       'El estado y el acumulado de reembolsos de Mercado Pago se contradicen.',
       409,
       'inconsistent_provider_refund_state'
@@ -293,23 +287,23 @@ export async function executeManualRefund({ paymentId, amount, amountProvided, m
   const availableCents = totalCents - refundedBeforeCents;
   if (availableCents <= 0) {
     if (confirmedRefunds[0]) return idempotentResponse(confirmedRefunds[0]);
-    fail('Mercado Pago informa que el pago ya fue reembolsado totalmente.', 409, 'payment_already_refunded');
+    throwError('Mercado Pago informa que el pago ya fue reembolsado totalmente.', 409, 'payment_already_refunded');
   }
 
   if (requestedCents !== null && requestedCents > availableCents) {
-    fail('amount supera el saldo reembolsable del pago.', 400, 'refund_amount_exceeds_balance');
+    throwError('amount supera el saldo reembolsable del pago.', 400, 'refund_amount_exceeds_balance');
   }
 
   const amountForProvider = requestedCents === null ? undefined : requestedCents / 100;
   const refund = await refundPayment(normalizedPaymentId, amountForProvider, fingerprint);
   const refundStatus = String(refund?.status || '').toLowerCase();
   if (!refund?.id || !CONFIRMED_REFUND_STATUSES.has(refundStatus)) {
-    fail('Mercado Pago no confirmo el reembolso.', 502, 'refund_not_confirmed');
+    throwError('Mercado Pago no confirmo el reembolso.', 502, 'refund_not_confirmed');
   }
 
   const actualCents = moneyToCents(refund.amount, 'El importe confirmado por Mercado Pago');
   if (actualCents <= 0 || actualCents > availableCents) {
-    fail('Mercado Pago devolvio un importe de reembolso inconsistente.', 502, 'invalid_provider_refund');
+    throwError('Mercado Pago devolvio un importe de reembolso inconsistente.', 502, 'invalid_provider_refund');
   }
 
   const paymentStatus = refundedBeforeCents + actualCents >= totalCents ? 'refunded' : 'partially_refunded';

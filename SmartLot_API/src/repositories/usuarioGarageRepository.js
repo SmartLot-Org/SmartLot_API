@@ -18,19 +18,14 @@ export default class UsuarioGarageRepository {
     }
 
     getUsuariosByGarageIdAsync = async (id_garage, requestingUser = null) => {
-        try {
-            const result = await pool.query(
-                `SELECT u.* 
-                 FROM usuarios u
-                 INNER JOIN usuario_garage ug ON u.id = ug.id_usuario
-                 WHERE ug.id_garage = $1`,
-                [id_garage]
-            );
-            return result.rows;
-        } catch (error) {
-            console.error(error);
-            return null;
-        }
+        const result = await pool.query(
+            `SELECT u.*
+             FROM usuarios u
+             INNER JOIN usuario_garage ug ON u.id = ug.id_usuario
+             WHERE ug.id_garage = $1`,
+            [id_garage]
+        );
+        return result.rows;
     }
 
     userHasGarageAsync = async (id_usuario, id_garage) => {

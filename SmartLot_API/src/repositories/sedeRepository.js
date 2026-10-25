@@ -2,7 +2,7 @@
 import pool from '../database/db.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
 import { writeTenantFilter } from '../helpers/writeTenantFilter.js';
-import { writeError } from '../helpers/writeAuthorization.js';
+import { httpError } from '../helpers/httpError.js';
 
 export default class SedeRepository {
     constructor() {
@@ -10,31 +10,27 @@ export default class SedeRepository {
     }
 
     getAllAsync = async (requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'sedes.id', empresaColumn: 'sedes.id_empresa' });
-            const result = await pool.query(
-                `SELECT * FROM sedes WHERE COALESCE("Borrado", false) = false ${tenant.sql} ORDER BY id`,
-                [...tenant.params]
-            );
-            return result.rows;
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'sedes.id', empresaColumn: 'sedes.id_empresa' });
+        const result = await pool.query(
+            `SELECT * FROM sedes WHERE COALESCE("Borrado", false) = false ${tenant.sql} ORDER BY id`,
+            [...tenant.params]
+        );
+        return result.rows;
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
-        try {
-            const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'sedes.id', empresaColumn: 'sedes.id_empresa' });
-            const result = await pool.query(
-                `SELECT * FROM sedes WHERE id = $1 AND COALESCE("Borrado", false) = false ${tenant.sql}`,
-                [id, ...tenant.params]
-            );
-            return result.rows[0] ?? null;
-        } catch (error) { console.error(error); return null; }
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'sedes.id', empresaColumn: 'sedes.id_empresa' });
+        const result = await pool.query(
+            `SELECT * FROM sedes WHERE id = $1 AND COALESCE("Borrado", false) = false ${tenant.sql}`,
+            [id, ...tenant.params]
+        );
+        return result.rows[0] ?? null;
     }
 
     validateCompanyAsync = async (id, client) => {
         const company = (await client.query(`SELECT id FROM empresas WHERE id=$1
             AND COALESCE("Borrado",false)=false FOR SHARE`, [id])).rows[0];
-        if (!company) throw writeError('La empresa de destino no existe.', 400);
+        if (!company) throw httpError('La empresa de destino no existe.', 400);
     }
 
     getForWriteAsync = async (id, scope, client) => {
@@ -44,7 +40,7 @@ export default class SedeRepository {
     }
 
     createAsync = async (entity, scope, client = pool) => {
-        if (!scope) throw writeError('Falta alcance autorizado.', 401);
+        if (!scope) throw httpError('Falta alcance autorizado.', 401);
         const filter = writeTenantFilter(scope, 7, { company: 'e.id', site: 'NULL' });
         return (await client.query(`INSERT INTO sedes(id_empresa,nombre,descripcion,ubicacion,latitud,longitud)
             SELECT e.id,$2,$3,$4,$5,$6 FROM empresas e WHERE e.id=$1

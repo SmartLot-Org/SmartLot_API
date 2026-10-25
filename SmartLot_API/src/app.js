@@ -29,6 +29,8 @@ import authMiddleware      from "./middlewares/authMiddleware.js"
 import errorHandler       from "./middlewares/errorHandler.js"
 import { requireRole }    from "./middlewares/rolesMiddleware.js"
 import ReservaService     from "./services/reservaService.js"
+import { httpError }      from "./helpers/httpError.js"
+import { FORBIDDEN, NOT_FOUND } from "./helpers/httpStatus.js"
 
 process.on('unhandledRejection', (reason) => {
     console.error('UNHANDLED REJECTION:', reason);
@@ -65,7 +67,7 @@ app.use(cors({
   origin(origin, callback) {
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`CORS blocked: ${origin} not allowed`));
+    return callback(httpError('Origen no permitido.', FORBIDDEN));
   },
   credentials: true,
 }));
@@ -74,6 +76,13 @@ app.use(express.json({
     limit: '10kb',
     verify: (req, res, buf) => { req.rawBody = buf; }
 }));
+// Express 5 deja req.body en undefined cuando no llega un cuerpo JSON. Los controllers
+// lo desestructuran, así que sin esto un pedido sin cuerpo fallaba con TypeError (500)
+// en lugar de devolver el 400 de validación.
+app.use((req, res, next) => {
+    req.body ??= {};
+    next();
+});
 
 app.use("/api/empresa", authMiddleware, EmpresaController);
 app.use("/api/garage", authMiddleware, GarageController);
@@ -98,8 +107,12 @@ app.use("/api/payments", (req, res, next) => {
     if (req.path === '/webhook' && req.method === 'POST') {
         return next();
     }
-    authMiddleware(req, res, next);
+    // Se devuelve la promesa para que Express capture un rechazo (p. ej. la base caída).
+    return authMiddleware(req, res, next);
 }, PaymentController);
+
+// Ruta inexistente: mismo formato de error que el resto en lugar del HTML por defecto de Express.
+app.use((req, res, next) => next(httpError('Ruta no encontrada.', NOT_FOUND)));
 
 app.use(errorHandler);
 
