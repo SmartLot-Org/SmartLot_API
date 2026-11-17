@@ -99,22 +99,28 @@ router.post('/google/callback', async (req, res, next) => {
     const { data, error } = result || {};
 
     if (error || !data?.user) {
+      console.warn('[Google Auth] Supabase rechazó el token:', error?.status ?? 'sin usuario', error?.code ?? '');
       throwError(GOOGLE_LOGIN_ERROR, error?.status >= 500 ? 503 : 401);
     }
 
     const googleEmail = getVerifiedGoogleEmail(data.user);
 
     if (!googleEmail) {
+      console.warn('[Google Auth] Identidad Google no verificada para el usuario de Supabase', data.user.id);
       throwError(GOOGLE_LOGIN_ERROR, 401);
     }
 
     const usuario = await repo.getByEmailAsync(googleEmail);
 
     if (!usuario) {
+      console.warn('[Google Auth] No existe usuario local para el email de Google.');
       throwError(GOOGLE_LOGIN_ERROR, 401);
     }
 
-    if (usuario.activo !== true || (usuario.Borrado != null && usuario.Borrado !== false)) {
+    // activo NULL se considera activo (DEFAULT true), igual que en el login con
+    // contraseña y en authMiddleware (COALESCE(activo, true)).
+    if (usuario.activo === false || (usuario.Borrado != null && usuario.Borrado !== false)) {
+      console.warn('[Google Auth] Cuenta local desactivada o borrada, id', usuario.id);
       throwError(GOOGLE_LOGIN_ERROR, 403);
     }
 
@@ -131,6 +137,7 @@ router.post('/google/callback', async (req, res, next) => {
       expires_in: process.env.JWT_EXPIRES_IN || '15m',
     });
   } catch (err) {
+    if (![400, 401, 403].includes(err?.statusCode)) console.error('[Google Auth] Error en callback:', err?.message);
     // No propagar mensajes del proveedor, del repositorio ni material de sesión.
     next(Object.assign(new Error(GOOGLE_LOGIN_ERROR), { statusCode: [400, 401, 403, 503].includes(err?.statusCode) ? err.statusCode : 500 }));
   }

@@ -67,15 +67,19 @@ export function normalizeRoles(roles) {
     return [...ids].sort((a, b) => String(a).localeCompare(String(b), 'es', { numeric: true }));
 }
 
+// Solo cuenta una llamada real a authMiddleware: un comentario que lo nombra (pasó en el
+// callback de Google) hacía figurar la ruta como "sesión" siendo pública.
+const sinComentarios = (fn) => String(fn).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
 function describeMiddleware(fns, authMiddleware) {
     const info = { auth: false, roles: null, allowsSelf: false, authExceptWebhook: false };
     for (const fn of fns) {
         if (fn === authMiddleware) info.auth = true;
         else if (fn?.requiredRoles) { info.roles = fn.requiredRoles; info.allowsSelf ||= Boolean(fn.allowsSelf); }
-        else if (typeof fn === 'function' && !fn.stack && /authMiddleware/.test(String(fn))) {
+        else if (typeof fn === 'function' && !fn.stack && /authMiddleware\s*\(/.test(sinComentarios(fn))) {
             // Cierre del montaje de pagos: autentica todo salvo POST /webhook.
             info.auth = true;
-            info.authExceptWebhook = /\/webhook/.test(String(fn));
+            info.authExceptWebhook = /\/webhook/.test(sinComentarios(fn));
         }
     }
     return info;
