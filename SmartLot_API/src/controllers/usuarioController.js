@@ -88,7 +88,7 @@ router.post('/login', authRateLimiter, async (req, res) => {
 router.post('/refresh', authRateLimiter, async (req, res) => {
     const sessionId = req.cookies?.refresh_session_id;
     if (!sessionId) {
-        return res.status(401).json({ error: true, message: 'No hay sesion de refresco.', statusCode: 401 });
+        throwError('No hay sesión de refresco.', 401);
     }
 
     try {

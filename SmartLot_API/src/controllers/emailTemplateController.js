@@ -2,6 +2,8 @@
 // Backoffice: solo superadmin (rol 4). CRUD + preview + envío de prueba de plantillas de email.
 import { Router } from 'express';
 import EmailTemplateService from '../services/EmailTemplateService.js';
+import { throwError } from '../helpers/httpError.js';
+import { BAD_REQUEST } from '../helpers/httpStatus.js';
 
 const router = Router();
 const svc = new EmailTemplateService();
@@ -30,11 +32,7 @@ router.post('/:codigo/test', async (req, res) => {
 
 router.put('/:codigo', async (req, res) => {
     const { nombre, descripcion, asunto, header_html, cuerpo_html, footer_html, variables, activa } = req.body ?? {};
-    if (!asunto || !cuerpo_html) {
-        return res.status(400).json({
-            error: true, message: 'asunto y cuerpo_html son obligatorios.', statusCode: 400
-        });
-    }
+    if (!asunto || !cuerpo_html) throwError('asunto y cuerpo_html son obligatorios.', BAD_REQUEST);
     const plantilla = await svc.updateAsync(req.params.codigo, {
         nombre, descripcion, asunto, header_html, cuerpo_html, footer_html, variables, activa
     });
