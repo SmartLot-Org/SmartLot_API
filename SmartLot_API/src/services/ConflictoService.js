@@ -44,9 +44,25 @@ export default class ConflictoService {
     }
 
     updateAsync = async (id, entity, requestingUser = null) => {
-        await this._validarRelacionesAsync(entity);
-        await this._validarTenantUsuarioAsync(entity, requestingUser);
-        return await this.repo.updateAsync(id, entity, requestingUser);
+        // El PUT de conflicto acepta campos parciales (deuda heredada, ver api-errores.md §6) y el
+        // UPDATE escribe todas las columnas: sin combinar con la fila actual, {estado} dejaba
+        // id_usuario, descripcion y prioridad en NULL.
+        const current = await this.repo.getByIdAsync(id, requestingUser);
+        if (!current) return null;
+        const definidos = Object.fromEntries(Object.entries(entity).filter(([, value]) => value !== undefined));
+        const superAdminActual = Object.entries(current).find(([columna]) => columna.toLowerCase() === 'superadmin')?.[1] === true;
+        const merged = {
+            id_usuario: current.id_usuario,
+            descripcion: current.descripcion,
+            prioridad: current.prioridad,
+            estado: current.estado,
+            SuperAdmin: superAdminActual,
+            ...definidos,
+        };
+
+        await this._validarRelacionesAsync(merged);
+        await this._validarTenantUsuarioAsync(merged, requestingUser);
+        return await this.repo.updateAsync(id, merged, requestingUser);
     }
 
     deleteAsync = async (id, deletedBy = null, requestingUser = null) =>
