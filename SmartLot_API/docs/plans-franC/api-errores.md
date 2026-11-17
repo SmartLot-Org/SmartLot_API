@@ -77,7 +77,7 @@ Si la base cae durante `authMiddleware` (consulta del usuario), responde **500**
 | `PUT /api/empresa/:id` | exige `nombre` y `descripcion` explícita (texto o `null`) | — |
 | `PUT /api/sede/:id` | exige `nombre` y `ubicacion` explícita (texto o `null`). `id_empresa`, `descripcion` y coordenadas no enviados **se conservan** (tienen efecto de tenant/mapa; ver SEG-04) | `PATCH /api/sede/:id` (nuevo) |
 
-**Deuda conocida (PUT parcial heredado, sin PATCH todavía):** `garage`, `vehiculo`, `usuario`, `reserva`, `conflicto`, `trato-empresa-garage`. Se aceptan campos parciales con `PUT`; migrarlos a `PATCH` rompe al frontend y no estaba en el alcance.
+**Deuda conocida (PUT parcial heredado, sin PATCH todavía):** `garage`, `vehiculo`, `usuario`, `reserva`, `conflicto`, `trato-empresa-garage`. Se aceptan campos parciales con `PUT`; migrarlos a `PATCH` rompe al frontend y no estaba en el alcance. Lo que sí está garantizado: **ninguno pisa columnas no enviadas**; los seis combinan el cuerpo con la fila actual antes del `UPDATE` (en `conflicto` faltaba: `PUT {estado}` dejaba `id_usuario`, `descripcion` y `prioridad` en `NULL`; corregido, `test/conflicto-put-parcial.test.js`).
 
 ## 7. Pagos
 
@@ -121,7 +121,7 @@ Un `catch` en un repository o service es válido solo si **traduce un caso conoc
 | Hallazgo | Sev. | Estado | Resuelto en | Evidencia (tests) |
 |---|---|---|---|---|
 | Repos que se tragan errores y devuelven `null` | ALTO | Resuelto: 75 `catch` removidos en 11 repos + 4 funciones más | Fase 1 | `test/api-errores.test.js` |
-| PUT validado como parcial que pisa columnas | ALTO | Resuelto en marca, modelo, rol, empresa y sede (con `PATCH`) | Fase 2 | `test/api-validacion.test.js` |
+| PUT validado como parcial que pisa columnas | ALTO | Resuelto en marca, modelo, rol, empresa y sede (con `PATCH`); en `conflicto` (PUT parcial heredado) se combina con la fila actual (sesión 2) | Fase 2 | `test/api-validacion.test.js`, `test/conflicto-put-parcial.test.js` |
 | 404 que sale como 500 y desloguea | ALTO | Resuelto (notificaciones 404; 5xx no borra cookies) | Fase 1 | `test/api-errores.test.js` |
 | `authMiddleware` responde 401 si cae la DB | MEDIO | Resuelto | Fase 1 | `test/api-errores.test.js` |
 | `paymentController` con otro dialecto | MEDIO | Resuelto | Fase 4 | `test/mp-controller.test.js`, `test/mp-webhook-auth.test.js` |
@@ -129,7 +129,7 @@ Un `catch` en un repository o service es válido solo si **traduce un caso conoc
 | Validación de `:id` inconsistente | MEDIO | Resuelto en todos los routers | Fase 3 | `test/api-validacion.test.js` |
 | Validación duplicada en PUT reserva | MEDIO | Resuelto | Fase 3 | `test/api-validacion.test.js` |
 | Un endpoint que devuelve dos entidades | MEDIO | Resuelto | Fase 5 | `test/api-contrato.test.js` |
-| Status puntuales, `authMiddleware` doble, endpoints huérfanos, errores de MP reenviados | BAJO | Resuelto | Fases 4-5 | `test/api-contrato.test.js`, `test/mp-service.test.js` |
+| Status puntuales, `authMiddleware` doble, endpoints huérfanos, errores de MP reenviados | BAJO | Resuelto (el 403 de `POST /api/payments/preference` que agrupaba tres causas se separó en 404 y 409 en la sesión 2) | Fases 4-5 | `test/api-contrato.test.js`, `test/mp-service.test.js`, `test/payment-preference-reserva.test.js` |
 | Naming, contrato de usuario | BAJO | Resuelto (convención documentada; contrato limpio) | Fase 5 | `test/api-contrato.test.js` |
 | Contrato publicado (`docs/plans-franC/api.md`, Postman) | SUGERENCIA | Resuelto: inventario generado del router real (137 endpoints) + colección Postman generada con casos de error | Fase 6 | `test/api-inventario.test.js` |
 
