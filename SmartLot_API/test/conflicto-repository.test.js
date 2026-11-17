@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 // Postgres real en memoria: el fallo era de placeholders ($n) y solo el motor SQL lo detecta.
 const db = new PGlite();
 mock.module('../src/database/db.js', {
-  exports: { default: { query: (sql, params) => db.query(sql, params) } },
+  defaultExport: { query: (sql, params) => db.query(sql, params) },
 });
 const { default: ConflictoRepository } = await import('../src/repositories/ConflictoRepository.js');
 const repo = new ConflictoRepository();
