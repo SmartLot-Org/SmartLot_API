@@ -6,12 +6,19 @@ import request from 'supertest';
 
 process.env.MP_WEBHOOK_SECRET = 'mp-it-secret-de-prueba';
 
-const { default: app } = await import('../src/app.js');
-const { createPreference, getPayment, refundPayment, searchPayments } = await import('../src/services/mpService.js');
-const { MercadoPagoConfig, Payment, CardToken } = await import('mercadopago');
-const pool = (await import('../src/database/db.js')).default;
+// Esta suite habla con el sandbox real de Mercado Pago y con la base de `.env`, así que no corre
+// dentro de `npm test`: sin red o sin base fallaba por el entorno, no por el código. Se habilita con
+// `npm run test:mp` (npm expone el nombre del script en npm_lifecycle_event) o con MP_INTEGRATION=1.
+const habilitada = process.env.npm_lifecycle_event === 'test:mp' || process.env.MP_INTEGRATION === '1';
+const omitir = !habilitada && 'Integración real con Mercado Pago y la base: correr con npm run test:mp';
 
-const cfg = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
+// Importar app.js abre el pool contra la base real: solo se hace si la suite corre.
+const { default: app } = habilitada ? await import('../src/app.js') : {};
+const { createPreference, getPayment, refundPayment, searchPayments } = habilitada ? await import('../src/services/mpService.js') : {};
+const { MercadoPagoConfig, Payment, CardToken } = habilitada ? await import('mercadopago') : {};
+const pool = habilitada ? (await import('../src/database/db.js')).default : null;
+
+const cfg = habilitada ? new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN }) : null;
 const RUN = 'mp-it-' + Date.now();
 const BUYER_EMAIL = 'test_user_smartlot@testuser.com';
 const canCreatePayments = process.env.MP_ACCESS_TOKEN?.startsWith('TEST-');
@@ -38,7 +45,7 @@ async function createApprovedPayment(amount, externalRef) {
   });
 }
 
-test('crea preferencia de pago real y devuelve init_point', async () => {
+test('crea preferencia de pago real y devuelve init_point', { skip: omitir }, async () => {
   const orderId = `${RUN}-pref`;
   const preference = await createPreference(
     [{ id: 'res-1', title: 'Reserva garage test', unit_price: 1500, quantity: 1 }],
@@ -52,12 +59,12 @@ test('crea preferencia de pago real y devuelve init_point', async () => {
   assert.equal(preference.items[0].title, 'Reserva garage test');
 });
 
-test('busca pagos reales por external_reference', async () => {
+test('busca pagos reales por external_reference', { skip: omitir }, async () => {
   const result = await searchPayments({ external_reference: `${RUN}-pref` });
   assert.ok(Array.isArray(result.results));
 });
 
-test('pago con tarjeta de prueba se aprueba y se reembolsa total', { skip: !canCreatePayments && 'Requiere credenciales TEST- para crear pagos' }, async () => {
+test('pago con tarjeta de prueba se aprueba y se reembolsa total', { skip: omitir || (!canCreatePayments && 'Requiere credenciales TEST- para crear pagos') }, async () => {
   const payment = await createApprovedPayment(1200, `${RUN}-full`);
   assert.equal(payment.status, 'approved');
 
@@ -69,7 +76,7 @@ test('pago con tarjeta de prueba se aprueba y se reembolsa total', { skip: !canC
   assert.ok(after.refunds?.length > 0 || after.status_detail === 'refunded', 'el pago deberia quedar reembolsado');
 });
 
-test('reembolso parcial conserva el pago aprobado', { skip: !canCreatePayments && 'Requiere credenciales TEST- para crear pagos' }, async () => {
+test('reembolso parcial conserva el pago aprobado', { skip: omitir || (!canCreatePayments && 'Requiere credenciales TEST- para crear pagos') }, async () => {
   const payment = await createApprovedPayment(2000, `${RUN}-partial`);
   assert.equal(payment.status, 'approved');
 
@@ -78,7 +85,7 @@ test('reembolso parcial conserva el pago aprobado', { skip: !canCreatePayments &
   assert.equal(refund.amount, 800);
 });
 
-test('webhook HTTP valida firma, procesa evento y persiste en la BD', { skip: !canCreatePayments && 'Requiere credenciales TEST- para crear pagos' }, async () => {
+test('webhook HTTP valida firma, procesa evento y persiste en la BD', { skip: omitir || (!canCreatePayments && 'Requiere credenciales TEST- para crear pagos') }, async () => {
   const payment = await createApprovedPayment(900, `${RUN}-webhook`);
   assert.equal(payment.status, 'approved');
 
@@ -107,7 +114,7 @@ test('webhook HTTP valida firma, procesa evento y persiste en la BD', { skip: !c
   assert.equal(pago.rows.length, 1);
 });
 
-test('webhook HTTP con firma invalida responde 401 con el payload estandar', async () => {
+test('webhook HTTP con firma invalida responde 401 con el payload estandar', { skip: omitir }, async () => {
   const res = await request(app)
     .post('/api/payments/webhook')
     .query({ 'data.id': '999999' })
@@ -119,7 +126,7 @@ test('webhook HTTP con firma invalida responde 401 con el payload estandar', asy
   assert.deepEqual(res.body, { error: true, message: 'Firma de webhook inválida.', statusCode: 401 });
 });
 
-test('webhook HTTP con firma valida pero pago inexistente marca el evento con error', async () => {
+test('webhook HTTP con firma valida pero pago inexistente marca el evento con error', { skip: omitir }, async () => {
   const eventId = `mpit-evt-missing-${Date.now()}`;
   const requestId = `req-${Date.now()}`;
   const ts = String(Math.floor(Date.now() / 1000));
@@ -142,7 +149,7 @@ test('webhook HTTP con firma valida pero pago inexistente marca el evento con er
   assert.ok(evento.rows[0].error_procesamiento, 'deberia guardar el error de procesamiento');
 });
 
-test('rutas protegidas exigen autenticacion', async () => {
+test('rutas protegidas exigen autenticacion', { skip: omitir }, async () => {
   const res = await request(app)
     .post('/api/payments/preference')
     .send({ items: [{ title: 'x', unit_price: 1 }], orderId: 'x' });
@@ -151,6 +158,7 @@ test('rutas protegidas exigen autenticacion', async () => {
 });
 
 after(async () => {
+  if (!habilitada) return;
   try {
     await pool.query(`DELETE FROM webhook_eventos WHERE mp_event_id LIKE 'mpit-evt-%'`);
     await pool.query(`DELETE FROM reembolsos WHERE id_pago IN (SELECT id FROM pagos WHERE id_orden_externa LIKE '${RUN}-%')`);
