@@ -22,7 +22,7 @@ mock.method(bcrypt, 'hash', async (value, rounds) => {
   return actualHash(value, rounds);
 });
 const query = async (sql, params) => {
-  if (failure === 'user' && sql.includes('WHERE u.email = $1')) throw new Error('Test SQL user failure');
+  if (failure === 'user' && sql.includes('WHERE lower(trim(u.email)) = lower(trim($1))')) throw new Error('Test SQL user failure');
   if (failure === 'pending' && sql.startsWith('SELECT id FROM solicitudes_registro')) throw new Error('Test SQL pending failure');
   if (failure && typeof failure === 'object' && sql.includes('INSERT INTO solicitudes_registro')) throw failure;
   const result = await db.query(sql, params).catch(error => { collisions.push(error); throw error; });

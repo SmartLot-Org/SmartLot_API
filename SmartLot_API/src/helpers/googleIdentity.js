@@ -27,9 +27,10 @@ export function getVerifiedGoogleEmail(user) {
 
     let hasGoogle = false;
     for (const identity of user.identities) {
-        if (!record(identity) || !nonEmpty(identity.provider) || !nonEmpty(identity.id) ||
-            !uuid(identity.identity_id) || identity.user_id !== user.id) return null;
-        if (identity.provider !== 'google') continue;
+        // Solo se validan las identidades Google: una identidad de otro proveedor
+        // (p. ej. "email") con forma distinta no debe invalidar el login con Google.
+        if (!record(identity) || identity.provider !== 'google') continue;
+        if (!nonEmpty(identity.id) || !uuid(identity.identity_id) || identity.user_id !== user.id) return null;
         const data = identity.identity_data;
         if (!record(data) || data.sub !== identity.id || data.email_verified !== true ||
             email(data.email) !== primaryEmail ||

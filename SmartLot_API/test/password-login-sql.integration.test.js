@@ -37,7 +37,7 @@ let statements = [];
 mock.module('../src/database/db.js', { defaultExport: {
   query: async (sql, params) => {
     statements.push(sql);
-    if (failRead && sql.includes('WHERE u.email = $1')) throw new Error('Test SQL read failure');
+    if (failRead && sql.includes('WHERE lower(trim(u.email)) = lower(trim($1))')) throw new Error('Test SQL read failure');
     if (failSession === 'null' && sql.includes('INSERT INTO refresh_sessions')) return { rows: [{ id: null }] };
     if (failSession && sql.includes('INSERT INTO refresh_sessions')) throw new Error('Test session failure');
     return db.query(sql, params);

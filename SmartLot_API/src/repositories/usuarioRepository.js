@@ -160,8 +160,10 @@ export default class UsuarioRepository {
                     FROM usuario_garage ug
                     WHERE ug.id_usuario = u.id
                  ) garages ON true
-                 WHERE u.email = $1 AND COALESCE(u."Borrado", false) = false`,
-                [email]
+                 WHERE lower(trim(u.email)) = lower(trim($1)) AND COALESCE(u."Borrado", false) = false
+                 ORDER BY (u.email = $1) DESC, u.id
+                 LIMIT 1`,
+                [typeof email === 'string' ? email.trim() : email]
             );
             return result.rows[0] ?? null;
         } catch (error) {
@@ -208,7 +210,7 @@ export default class UsuarioRepository {
                 `INSERT INTO usuarios (id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, activo, token_version, limite_reservas_activas)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
-                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0, entity.limite_reservas_activas ?? null]
+                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo ?? true, entity.token_version ?? 0, entity.limite_reservas_activas ?? null]
             );
             return result.rows[0];
         } catch (error) {
@@ -230,7 +232,7 @@ export default class UsuarioRepository {
                 `INSERT INTO usuarios (id_rol, nombre, apellido, id_sede, email, telefono, contraseña, id_empresa, activo, token_version, limite_reservas_activas)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [entity.id_rol, entity.nombre, entity.apellido, entity.id_sede,
-                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo, entity.token_version ?? 0, entity.limite_reservas_activas ?? null]
+                entity.email, entity.telefono, entity.contraseña, entity.id_empresa, entity.activo ?? true, entity.token_version ?? 0, entity.limite_reservas_activas ?? null]
             );
             return result.rows[0];
         } catch (error) {

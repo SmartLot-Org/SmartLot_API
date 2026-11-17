@@ -67,6 +67,10 @@ export default class UsuarioService {
         );
 
         if (!usuario || !hasRealHash || usuario.activo === false || usuario.Borrado === true || !coincide) {
+            // Log interno (no se expone al cliente) para poder diagnosticar en el deploy.
+            const motivo = !usuario ? 'usuario inexistente' : !hasRealHash ? 'hash de contraseña no bcrypt'
+                : usuario.activo === false ? 'cuenta desactivada' : usuario.Borrado === true ? 'cuenta borrada' : 'contraseña incorrecta';
+            console.warn(`[Login] 401: ${motivo}${usuario ? ` (usuario id ${usuario.id})` : ''}`);
             const error = new Error('Credenciales incorrectas.');
             error.statusCode = 401;
             throw error;

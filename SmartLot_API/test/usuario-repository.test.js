@@ -18,5 +18,5 @@ test('id_garage escalar es deterministico y se conserva id_garages', () => {
 test('getById y getByEmail siguen parametrizados y getAll conserva tenant', () => {
   assert.match(source, /getTenantCondition\(requestingUser, 1/);
   assert.match(source, /WHERE u\.id = \$1/);
-  assert.match(source, /WHERE u\.email = \$1/);
+  assert.match(source, /WHERE lower\(trim\(u\.email\)\) = lower\(trim\(\$1\)\)/);
 });

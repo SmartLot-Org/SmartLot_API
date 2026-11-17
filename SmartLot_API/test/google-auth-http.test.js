@@ -229,3 +229,15 @@ for (const key of ['JWT_SECRET', 'JWT_REFRESH_SECRET']) test(`configuración ${k
     noLogin(response, { lookup: true });
   } finally { process.env[key] = previous; }
 });
+
+test('cuenta local con activo NULL (DEFAULT true) puede entrar con Google', async () => {
+  state.local = { ...local, activo: null };
+  const response = await callback({ access_token: token });
+  assert.equal(response.status, 200);
+});
+
+test('una identidad no Google con forma distinta no invalida el login con Google', async () => {
+  state.user.identities.unshift({ provider: 'email', id: userId });
+  const response = await callback({ access_token: token });
+  assert.equal(response.status, 200);
+});
