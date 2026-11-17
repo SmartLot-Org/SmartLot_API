@@ -75,22 +75,36 @@ test('PUT marca completo sobre una marca inexistente responde 404', async () => 
     assert.equal(res.status, 404);
 });
 
-test('PUT modelo exige nombre e id_marca', async () => {
-    assert.equal((await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno' })).status, 400);
-    assert.equal((await as(request(app).put('/api/modelo/5')).send({ id_marca: 1 })).status, 400);
-    assert.equal((await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', id_marca: 'x' })).status, 400);
+test('PUT modelo exige nombre, id_marca y tipo_vehiculo', async () => {
+    assert.equal((await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', tipo_vehiculo: 'auto' })).status, 400);
+    assert.equal((await as(request(app).put('/api/modelo/5')).send({ id_marca: 1, tipo_vehiculo: 'auto' })).status, 400);
+    assert.equal((await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', id_marca: 'x', tipo_vehiculo: 'auto' })).status, 400);
+    assert.equal((await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', id_marca: 1 })).status, 400);
+    assert.equal((await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', id_marca: 1, tipo_vehiculo: 'camion' })).status, 400);
     assert.equal(ejecuto(/UPDATE modelos/), false);
 });
 
-test('PUT modelo completo llega al UPDATE con ambos campos', async () => {
+test('PUT modelo completo llega al UPDATE con todos los campos', async () => {
     onQuery = async (sql) => {
         if (sql.includes('FROM marcas')) return { rows: [{ id: 1 }] };
         if (sql.includes('UPDATE modelos')) return { rows: [{ id: 5, id_marca: 1, nombre: 'Uno' }] };
         return { rows: [] };
     };
-    const res = await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', id_marca: 1 });
+    const res = await as(request(app).put('/api/modelo/5')).send({ nombre: 'Uno', id_marca: 1, tipo_vehiculo: 'auto' });
     assert.equal(res.status, 200);
-    assert.deepEqual(queries.find(q => /UPDATE modelos/.test(q.sql)).params, [1, 'Uno', 5]);
+    assert.deepEqual(queries.find(q => /UPDATE modelos/.test(q.sql)).params, [1, 'Uno', 'auto', 5]);
+});
+
+test('POST modelo exige tipo_vehiculo y lo inserta', async () => {
+    assert.equal((await as(request(app).post('/api/modelo')).send({ nombre: 'Uno', id_marca: 1 })).status, 400);
+    assert.equal(ejecuto(/INSERT INTO modelos/), false);
+
+    onQuery = async (sql) => sql.includes('INSERT INTO modelos')
+        ? { rows: [{ id: 9, id_marca: 1, nombre: 'Uno', tipo_vehiculo: 'moto' }] }
+        : { rows: [{ id: 1 }] };
+    const res = await as(request(app).post('/api/modelo')).send({ nombre: 'Uno', id_marca: 1, tipo_vehiculo: 'moto' });
+    assert.equal(res.status, 201);
+    assert.deepEqual(queries.find(q => /INSERT INTO modelos/.test(q.sql)).params, [1, 'Uno', 'moto']);
 });
 
 test('PUT rol exige tipo_rol', async () => {

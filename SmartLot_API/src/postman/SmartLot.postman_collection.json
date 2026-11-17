@@ -1709,7 +1709,7 @@
                         "description": "Roles 4. Éxito: 201. Ver docs/plans-franC/api.md.",
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"nombre\": \"Uno\",\n  \"id_marca\": 1\n}",
+                            "raw": "{\n  \"nombre\": \"Uno\",\n  \"id_marca\": 1,\n  \"tipo_vehiculo\": \"auto\"\n}",
                             "options": {
                                 "raw": {
                                     "language": "json"
@@ -1742,7 +1742,7 @@
                         "description": "Roles 4. Éxito: 200. Ver docs/plans-franC/api.md.",
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"nombre\": \"Uno\",\n  \"id_marca\": 1\n}",
+                            "raw": "{\n  \"nombre\": \"Uno\",\n  \"id_marca\": 1,\n  \"tipo_vehiculo\": \"auto\"\n}",
                             "options": {
                                 "raw": {
                                     "language": "json"
@@ -3874,7 +3874,7 @@
                         "description": "Caso de error del plan \"API REST\".",
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"nombre\": \"Uno\"\n}",
+                            "raw": "{\n  \"nombre\": \"Uno\",\n  \"tipo_vehiculo\": \"auto\"\n}",
                             "options": {
                                 "raw": {
                                     "language": "json"

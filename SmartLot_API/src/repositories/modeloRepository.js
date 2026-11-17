@@ -18,16 +18,16 @@ export default class ModeloRepository {
 
     createAsync = async (entity) => {
         const result = await pool.query(
-            'INSERT INTO modelos (id_marca, nombre) VALUES ($1, $2) RETURNING *',
-            [entity.id_marca, entity.nombre]
+            'INSERT INTO modelos (id_marca, nombre, tipo_vehiculo) VALUES ($1, $2, $3) RETURNING *',
+            [entity.id_marca, entity.nombre, entity.tipo_vehiculo]
         );
         return result.rows[0];
     }
 
     updateAsync = async (id, entity) => {
         const result = await pool.query(
-            'UPDATE modelos SET id_marca = $1, nombre = $2 WHERE id = $3 AND COALESCE("Borrado", false) = false RETURNING *',
-            [entity.id_marca, entity.nombre, id]
+            'UPDATE modelos SET id_marca = $1, nombre = $2, tipo_vehiculo = $3 WHERE id = $4 AND COALESCE("Borrado", false) = false RETURNING *',
+            [entity.id_marca, entity.nombre, entity.tipo_vehiculo, id]
         );
         return result.rows[0] ?? null;
     }
