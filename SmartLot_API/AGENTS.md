@@ -36,7 +36,7 @@ router.patch('/:id/contrasenia', authMiddleware, requireRoleOrSelf(1, 4), handle
 
 ## Test Command
 ```bash
-npm test                 # full suite; node:test, ~25 s
+npm test                 # full suite without real services; node:test, ~25 s
 npm run test:mp          # Mercado Pago subset
 npm run check:syntax && npm run check:routes
 npm run routes:inventory -- --write   # regenera el inventario de docs/plans-franC/api.md desde el router real
@@ -45,7 +45,7 @@ npm run postman:generate              # regenera src/postman/SmartLot.postman_co
 - Si agregás, quitás o cambiás roles/rutas, regenerá el inventario y la colección: `test/api-inventario.test.js` falla si `docs/plans-franC/api.md` o Postman quedan desactualizados. Los scripts ESM necesitan `--experimental-test-module-mocks` (los npm scripts ya lo incluyen).
 - Behaviour tests use `supertest` + `mock.module('../src/database/db.js', ...)` (see `test/api-errores.test.js`). Do not assert on source text with `readFile` + regex.
 - Always mock `../src/services/emailService.js` when importing `src/app.js`: it opens its own real DB pool on import.
-- `test/mp-integration.test.js` talks to the real Mercado Pago sandbox and the real DB configured in `.env`.
+- `test/mp-integration.test.js` talks to the real Mercado Pago sandbox and the real DB configured in `.env`, so it is skipped in `npm test`; it only runs with `npm run test:mp` or `MP_INTEGRATION=1`.
 - Use `--test-timeout=120000` when running the suite from automation: a test awaiting a promise that never resolves blocks forever.
 
 ## Work in progress

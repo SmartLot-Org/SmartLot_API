@@ -72,7 +72,7 @@ Si la base cae durante `authMiddleware` (consulta del usuario), responde **500**
 | Endpoint | Regla del PUT | PATCH |
 |---|---|---|
 | `PUT /api/marca/:id` | exige `nombre` | — |
-| `PUT /api/modelo/:id` | exige `nombre` e `id_marca` | — |
+| `PUT /api/modelo/:id` | exige `nombre`, `id_marca` y `tipo_vehiculo` (`auto`, `moto` o `pickup`; también en el `POST`) | — |
 | `PUT /api/rol/:id` | exige `tipo_rol` | — |
 | `PUT /api/empresa/:id` | exige `nombre` y `descripcion` explícita (texto o `null`) | — |
 | `PUT /api/sede/:id` | exige `nombre` y `ubicacion` explícita (texto o `null`). `id_empresa`, `descripcion` y coordenadas no enviados **se conservan** (tienen efecto de tenant/mapa; ver SEG-04) | `PATCH /api/sede/:id` (nuevo) |
@@ -96,6 +96,8 @@ Si la base cae durante `authMiddleware` (consulta del usuario), responde **500**
 | `POST /api/trato-empresa-garage` para admin | `POST /api/solicitud-empresa-garage` | Un endpoint devolvía dos entidades (trato o solicitud según el rol). Ahora el alta directa es solo del superadmin. |
 
 **Convención para rutas nuevas:** kebab-case, sustantivos en plural, en castellano, solo ASCII. **No se renombran rutas existentes** (rompe al frontend); las excepciones heredadas (`/ocupacion_reserva/:id`, `/control-acceso`, `/no-leidas/count`, etc.) quedan como están.
+
+Patente de vehículo duplicada: **409** (era el único duplicado que respondía 400).
 
 Otras limpiezas de contrato: `authMiddleware` ya no se repite en cada ruta de `reserva` y `notificacion` (lo aplica `app.js`); `GET /api/usuario*` deja de enviar `limite_reservas_activas` duplicado (queda `limiteReservasActivas`).
 

@@ -298,6 +298,8 @@ Roles: 1 admin · 2 empleado (cliente) · 3 garagista · 4 superadmin · 5 dueñ
 | `POST /api/payments/*`, `…/refund` | 502 `MP_UPSTREAM_ERROR` | Falla de Mercado Pago |
 | `POST /api/payments/:paymentId/refund` | 409 y códigos de `manualRefundService` | Reembolso no permitido / estado inconsistente |
 | `POST /api/solicitud-registro` | 202 siempre (si es válida) | No revela si el correo ya existe |
+| `POST /api/vehiculo`, `PUT /api/vehiculo/:id` | 409 | Ya existe un vehículo con esa patente |
+| `POST/PUT /api/modelo` | 400 | La marca indicada no existe |
 
 ## 8. Cómo mantener este documento
 
