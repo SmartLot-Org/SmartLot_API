@@ -2,6 +2,8 @@
 import VehiculoRepository from '../repositories/vehiculoRepository.js';
 import UsuarioService from './usuarioService.js';
 import ModeloService from './modeloService.js';
+import { throwError } from '../helpers/httpError.js';
+import { CONFLICT } from '../helpers/httpStatus.js';
 
 export default class VehiculoService {
     constructor() {
@@ -31,9 +33,7 @@ export default class VehiculoService {
                 if (existing.Borrado) {
                     return await this.repo.reactivateAsync(existing.id, entity);
                 }
-                const error = new Error(`Ya existe un vehículo con la patente ${entity.patente}.`);
-                error.statusCode = 400;
-                throw error;
+                throwError(`Ya existe un vehículo con la patente ${entity.patente}.`, CONFLICT);
             }
         }
 
@@ -71,9 +71,7 @@ export default class VehiculoService {
         if (entity.patente) {
             const existing = await this.repo.getByPatenteAsync(entity.patente);
             if (existing && existing.id !== id) {
-                const error = new Error(`Ya existe un vehículo con la patente ${entity.patente}.`);
-                error.statusCode = 400;
-                throw error;
+                throwError(`Ya existe un vehículo con la patente ${entity.patente}.`, CONFLICT);
             }
         }
 

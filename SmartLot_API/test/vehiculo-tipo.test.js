@@ -127,3 +127,18 @@ test('el servicio deriva el tipo desde el modelo y no desde el frontend', () => 
 test('la entidad Vehiculo expone el campo tipo_vehiculo', () => {
   assert.match(entity, /\btipo_vehiculo\b/);
 });
+
+test('una patente repetida responde 409 al crear y al editar, como el resto de los duplicados', async () => {
+  const { svc } = vehiculoService();
+  svc.repo.getByPatenteIncludingDeletedAsync = async () => ({ id: 2, patente: 'AB123CD', Borrado: false });
+  svc.repo.getByPatenteAsync = async () => ({ id: 2, patente: 'AB123CD' });
+
+  await assert.rejects(
+    svc.createAsync({ id_usuario: 10, id_modelo: 1, patente: 'AB123CD' }, admin),
+    { statusCode: 409, message: 'Ya existe un vehículo con la patente AB123CD.' },
+  );
+  await assert.rejects(
+    svc.updateAsync(5, { id_modelo: 1, patente: 'AB123CD' }, admin),
+    { statusCode: 409 },
+  );
+});
