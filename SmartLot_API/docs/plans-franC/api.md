@@ -274,7 +274,7 @@ Roles: 1 admin · 2 empleado (cliente) · 3 garagista · 4 superadmin · 5 dueñ
 
 | Método | Ruta | Acceso | Éxito | Errores (controller + comunes) |
 |---|---|---|---|---|
-| POST | `/api/payments/preference` | roles 1, 2, 4 | 200/201 | 400, 401, 403, 409, 500 |
+| POST | `/api/payments/preference` | roles 1, 2, 4 | 200/201 | 400, 401, 403, 404, 409, 500 |
 | GET | `/api/payments/webhook-events` | roles 4 | 200 | 401, 403, 500 |
 | POST | `/api/payments/verificar` | roles 1, 2, 4 | 200 | 401, 403, 500 |
 | GET | `/api/payments/:paymentId` | roles 1, 2, 4 | 200 | 401, 403, 500 |

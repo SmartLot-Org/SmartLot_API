@@ -19,7 +19,7 @@ import {
 } from '../services/paymentReadService.js';
 import { readProviderRefundState } from '../services/paymentRefundState.js';
 import { throwError } from '../helpers/httpError.js';
-import { BAD_REQUEST, CONFLICT, FORBIDDEN, SERVICE_UNAVAILABLE, UNAUTHORIZED } from '../helpers/httpStatus.js';
+import { BAD_REQUEST, CONFLICT, FORBIDDEN, NOT_FOUND, SERVICE_UNAVAILABLE, UNAUTHORIZED } from '../helpers/httpStatus.js';
 
 const router = Router();
 
@@ -227,23 +227,24 @@ router.post('/preference', requireRole(1, 2, 4), async (req, res) => {
   if (!isValidId(String(idReserva))) throwError('idReserva inválido.', BAD_REQUEST);
 
   // La reserva del empleado usa su importe persistido, nunca uno enviado por el cliente.
+  // Solo se expira una reserva propia: el filtro de dueño va también en el UPDATE.
   const expired = await pool.query(
     `UPDATE reservas SET estado_reserva='expirada'
-      WHERE id=$1 AND estado_reserva='pendiente_pago' AND retencion_pago_hasta<=NOW()
-      RETURNING id`, [idReserva]
+      WHERE id=$1 AND id_usuario=$2 AND responsable_pago='empleado'
+        AND estado_reserva='pendiente_pago' AND retencion_pago_hasta<=NOW()
+      RETURNING id`, [idReserva, req.usuario?.id]
   );
+  if (expired.rowCount) throwError('La retención de pago de la reserva venció. Volvé a reservar.', CONFLICT, 'RESERVATION_HOLD_EXPIRED');
 
-  let reserva = null;
-  if (!expired.rowCount) {
-    reserva = (await pool.query(
-      `SELECT r.* FROM reservas r
-        WHERE r.id=$1 AND r.id_usuario=$2 AND r.responsable_pago='empleado'`,
-        [idReserva, req.usuario?.id]
-    )).rows[0];
-  }
+  const reserva = (await pool.query(
+    `SELECT r.* FROM reservas r
+      WHERE r.id=$1 AND r.id_usuario=$2 AND r.responsable_pago='empleado'`,
+      [idReserva, req.usuario?.id]
+  )).rows[0];
 
-  if (!reserva) throwError('La reserva no existe, expiro o no pertenece al empleado.', FORBIDDEN);
-  if (reserva.estado_reserva !== 'pendiente_pago') throwError('La reserva no esta pendiente de pago.', CONFLICT);
+  // Una reserva ajena responde igual que una inexistente, para no revelar que existe.
+  if (!reserva) throwError('La reserva no existe.', NOT_FOUND);
+  if (reserva.estado_reserva !== 'pendiente_pago') throwError('La reserva no está pendiente de pago.', CONFLICT);
 
   const existing = (await pool.query(
     `SELECT mp_preference_id FROM pagos
