@@ -31,10 +31,6 @@ export default class UsuarioRepository {
         await pool.query('DELETE FROM refresh_sessions WHERE id = $1', [session_id]);
     }
 
-    deleteUserSessionsAsync = async (usuario_id) => {
-        await pool.query('DELETE FROM refresh_sessions WHERE usuario_id = $1', [usuario_id]);
-    }
-
     revokeLogoutSessionsAsync = async (id, version, client) => {
         // El UPDATE comprueba la version persistida y bloquea la fila en la misma
         // operacion. Un segundo logout con esa version no puede volver a revocar.
@@ -283,14 +279,6 @@ export default class UsuarioRepository {
             token_version=COALESCE(token_version,0)+1,"UpdateBy"=$2,"UpdateAt"=NOW()
             WHERE id=$3 AND COALESCE("Borrado",false)=false ${filter.sql} RETURNING *`,
         [contraseña, scope?.actorId, id, ...filter.params])).rows[0] ?? null;
-    }
-
-    incrementTokenVersionAsync = async (id) => {
-        const result = await pool.query(
-            'UPDATE usuarios SET token_version = token_version + 1 WHERE id = $1 AND COALESCE("Borrado", false) = false RETURNING token_version',
-            [id]
-        );
-        return result.rows[0]?.token_version ?? null;
     }
 
     deleteAsync = async (id, scope, client = pool) => {

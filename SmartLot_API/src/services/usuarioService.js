@@ -210,13 +210,6 @@ export default class UsuarioService {
         };
     }
 
-    revocarRefreshTokensAsync = async (id) => {
-        const version = await this.repo.incrementTokenVersionAsync(id);
-        if (version === null) throw httpError('Usuario no encontrado.', 404);
-        await this.repo.deleteUserSessionsAsync(id);
-        return version;
-    }
-
     logoutAsync = async (accessToken) => {
         const credential = verifyLogoutCredential(accessToken);
         if (!credential) return false;
