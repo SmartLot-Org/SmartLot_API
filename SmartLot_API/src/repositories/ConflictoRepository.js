@@ -164,8 +164,9 @@ export default class ConflictoRepository {
     }
 
     updateAsync = async (id, entity, requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 6, 'u');
         const superAdminColumn = await getSuperAdminColumnAsync();
+        // El id ocupa $5 sin columna SuperAdmin y $6 con ella: el tenant tiene que seguir al último parámetro.
+        const tenant = getTenantCondition(requestingUser, superAdminColumn ? 7 : 6, 'u');
         if (!superAdminColumn) {
             const result = await pool.query(
                 `UPDATE conflictos c
