@@ -20,6 +20,8 @@
 //     [...tenant.params]
 //   );
 
+import { hasRole, ROLE_IDS } from './roles.js';
+
 const isPositiveNumber = (value) => {
     const number = Number(value);
     return Number.isFinite(number) && number > 0;
@@ -31,8 +33,9 @@ const isPositiveNumber = (value) => {
  *
  * @param {object|null} requestingUser - `req.usuario` (debe contener id_rol, id_empresa, id_sede).
  * @param {number} firstParamIndex - Índice `$N` del primer parámetro a agregar.
- * @param {{ sedeColumn: string, empresaColumn: string }} columns - Referencias SQL completas
- *        (con alias) de las columnas de sede y empresa sobre las que filtrar.
+ * @param {{ sedeColumn: string, empresaColumn: string, garageColumn?: string, ownerColumn?: string }} columns -
+ *        Referencias SQL completas (con alias). Siempre constantes del repositorio, nunca datos
+ *        del pedido. `ownerColumn` restringe al empleado (rol 2) a sus propios registros.
  * @returns {{ sql: string, params: any[] }}
  */
 export const getTenantCondition = (requestingUser, firstParamIndex, columns) => {
@@ -42,15 +45,25 @@ export const getTenantCondition = (requestingUser, firstParamIndex, columns) => 
         return { sql: '', params: [] };
     }
 
-    if (Number(requestingUser?.id_rol) === 4) {
+    if (hasRole(requestingUser, ROLE_IDS.SUPERADMIN)) {
         return { sql: '', params: [] };
     }
 
-    const tipoRol = requestingUser?.tipo_rol?.toLowerCase();
-    const esRolDeGarage = tipoRol === 'dueño_garage' || tipoRol === 'garagista';
+    // Por ID de rol, no por nombre (ver helpers/roles.js).
+    const esRolDeGarage = hasRole(requestingUser, ROLE_IDS.DUENO_GARAGE, ROLE_IDS.GARAGISTA);
     if (esRolDeGarage && columns.garageColumn) {
         return {
             sql: ` AND EXISTS (SELECT 1 FROM usuario_garage tenant_ug WHERE tenant_ug.id_usuario = $${firstParamIndex} AND tenant_ug.id_garage = ${columns.garageColumn})`,
+            params: [Number(requestingUser.id)],
+        };
+    }
+
+    // Un empleado no ve las reservas ni los vehículos de sus compañeros de sede:
+    // es el mismo alcance "own" que ya aplican las escrituras (authorizeWrite).
+    if (hasRole(requestingUser, ROLE_IDS.CLIENTE) && columns.ownerColumn) {
+        if (!isPositiveNumber(requestingUser.id)) return { sql: ' AND false', params: [] };
+        return {
+            sql: ` AND ${columns.ownerColumn} = $${firstParamIndex}`,
             params: [Number(requestingUser.id)],
         };
     }

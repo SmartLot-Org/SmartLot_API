@@ -9,8 +9,8 @@ import { ESTADOS_SOLICITUD, puedeTransicionarSolicitud } from '../src/helpers/es
 const admin = { id: 1, id_rol: 1, tipo_rol: 'admin', id_empresa: 10 };
 const adminSede = { ...admin, id_sede: 7 };
 const otroAdmin = { ...admin, id: 2, id_empresa: 20 };
-const owner = { id: 30, tipo_rol: 'dueño_garage' };
-const otroOwner = { id: 31, tipo_rol: 'dueño_garage' };
+const owner = { id: 30, id_rol: 5, tipo_rol: 'dueño_garage' };
+const otroOwner = { id: 31, id_rol: 5, tipo_rol: 'dueño_garage' };
 const superadmin = { id: 99, id_rol: 4, tipo_rol: 'superadmin' };
 
 function serviceFixture() {

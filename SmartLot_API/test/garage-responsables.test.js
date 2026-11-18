@@ -56,7 +56,7 @@ test('fallo al asignar personal revierte toda la transacción', async () => {
 
 test('dueño no puede asignar terceros ni cambiar el propietario al crear', async () => {
   const { svc, commands } = setup();
-  await assert.rejects(svc.createAsync(entity, { id: 20, tipo_rol: 'dueño_garage' }), { statusCode: 403 });
+  await assert.rejects(svc.createAsync(entity, { id: 20, id_rol: 5, tipo_rol: 'dueño_garage' }), { statusCode: 403 });
   assert.deepEqual(commands, []);
 });
 

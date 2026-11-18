@@ -6,7 +6,7 @@ mock.module('../src/database/db.js', { defaultExport: {} });
 const { default: GarageService } = await import('../src/services/garageService.js');
 const { default: TratoEmpresaGarageService } = await import('../src/services/tratoEmpresaGarageService.js');
 
-const owner = { id: 50, tipo_rol: 'dueño_garage' };
+const owner = { id: 50, id_rol: 5, tipo_rol: 'dueño_garage' };
 const admin = { id: 10, id_rol: 1, tipo_rol: 'admin', id_empresa: 1 };
 const adminSede = { ...admin, id_sede: 7 };
 const superadmin = { id: 1, id_rol: 4, tipo_rol: 'superadmin' };

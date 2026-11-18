@@ -50,7 +50,7 @@ test('dueño agrupa por empresa y el repositorio recibe exclusivamente su usuari
   const service = new CuentaCorrienteService();
   let received;
   service.repo = { getDuenoAsync: async (filters) => { received = filters; return [{ ...rows[0], id_empresa: 5, empresa: 'SmartLot', responsable_pago: 'empresa' }]; } };
-  const result = await service.getDuenoAsync({ periodo: '2026-08', id_garage: '26', id_usuario: '999' }, { id: 30, tipo_rol: 'dueño_garage' });
+  const result = await service.getDuenoAsync({ periodo: '2026-08', id_garage: '26', id_usuario: '999' }, { id: 30, id_rol: 5, tipo_rol: 'dueño_garage' });
   assert.equal(received.idUsuario, 30);
   assert.equal(result.items[0].empresa, 'SmartLot');
   assert.deepEqual(result.summary, { reservasUtilizadas: 1, minutosTotales: 60, importeGenerado: 3200, importeEmpresas: 3200, importeEmpleados: 0 });
