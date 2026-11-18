@@ -389,7 +389,11 @@ export const enviarCorreoDesdePlantilla = async (destinatario, codigo, variables
     } else {
         const fallback = FALLBACKS[codigo];
         if (!fallback) throw new Error(`No existe la plantilla de correo "${codigo}".`);
-        ({ asunto, html } = fallback(variables));
+        // Igual que renderPlantilla: los valores vienen de formularios (p. ej. el registro
+        // público de empresa) y sin escapar se podía inyectar HTML o enlaces en un mail
+        // que SmartLot le manda al superadmin.
+        const seguras = Object.fromEntries(Object.entries(variables).map(([clave, valor]) => [clave, escaparHtml(valor)]));
+        ({ asunto, html } = fallback(seguras));
     }
 
     return await enviarCorreo(destinatario, asunto, html);

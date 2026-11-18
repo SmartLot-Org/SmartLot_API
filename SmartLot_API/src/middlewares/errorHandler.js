@@ -32,7 +32,9 @@ const errorHandler = (err, req, res, next) => {
     }
 
     const payload = { error: true, message, statusCode };
-    const code = dbError?.code ?? err.code;
+    // En un 500 el code suele ser del driver o del sistema (42P01, ECONNREFUSED...):
+    // describe la infraestructura y no le sirve al cliente.
+    const code = dbError?.code ?? (statusCode === INTERNAL_SERVER_ERROR && !explicitStatus ? undefined : err.code);
     if (code) payload.code = code;
     if (err.code === 'RESERVATION_LIMIT_REACHED') payload.details = err.details;
     if (err.paymentId) payload.paymentId = err.paymentId;

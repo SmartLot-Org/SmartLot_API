@@ -98,3 +98,15 @@ test('enviarCorreoDesdePlantilla lanza error si no existe ni plantilla ni respal
         /No existe la plantilla de correo "plantilla_inexistente"\./
     );
 });
+test('la plantilla de respaldo escapa lo que llega del registro publico (sin HTML inyectado en el mail al superadmin)', async () => {
+    await enviarCorreoDesdePlantilla('super@test.test', 'solicitud_registro_superadmin', {
+        nombre_superadmin: 'Super',
+        solicitante: '<a href="https://phishing.test">Verificá tu cuenta</a>',
+        empresa_nombre: '<img src=x onerror=alert(1)>',
+        email_solicitante: 'x@test.test',
+    });
+    const { html } = sends[0];
+    assert.doesNotMatch(html, /<a href="https:\/\/phishing\.test">/);
+    assert.doesNotMatch(html, /<img src=x/);
+    assert.match(html, /&lt;a href=&quot;https:\/\/phishing\.test&quot;&gt;/);
+});
