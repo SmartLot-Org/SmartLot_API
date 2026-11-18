@@ -264,3 +264,12 @@ test('pago revertido: la reserva confirmada sin uso se cancela; una con ingreso 
   assert.deepEqual([a.estado_reserva, a.Borrado], ['cancelada', true]);
   assert.deepEqual([b.estado_reserva, b.Borrado], ['confirmada', false]);
 });
+
+test('login: 10 intentos fallidos sobre la misma cuenta la bloquean 15 min sin afectar a otras', async () => {
+  const intento = (email) => request(app).post('/usuarios/login').send({ email, contraseña: 'Incorrecta12!!' });
+  for (let i = 0; i < 10; i++) assert.equal((await intento('e9@test.test')).status, 401);
+  const bloqueado = await intento('e9@test.test');
+  assert.equal(bloqueado.status, 429);
+  assert.equal((await request(app).post('/usuarios/login').send({ email: 'e9@test.test', contraseña: 'Actual12!!AA' })).status, 429);
+  assert.equal((await intento('e10@test.test')).status, 401);
+});

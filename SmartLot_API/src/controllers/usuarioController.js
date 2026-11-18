@@ -6,7 +6,7 @@ import authMiddleware from '../middlewares/authMiddleware.js';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
 import { ROLE_NAMES } from '../helpers/roles.js';
 import { requireRole, requireRoleOrSelf } from '../middlewares/rolesMiddleware.js';
-import authRateLimiter from '../middlewares/rateLimiterMiddleware.js';
+import authRateLimiter, { credentialRateLimiter } from '../middlewares/rateLimiterMiddleware.js';
 import { httpError, throwError } from '../helpers/httpError.js';
 
 const router = Router();
@@ -38,7 +38,7 @@ router.get('/garage/:id_garage', authMiddleware, requireRole(1, 3, 4, 'dueño_ga
 });
 
 // LOGIN
-router.post('/login', authRateLimiter, async (req, res) => {
+router.post('/login', authRateLimiter, credentialRateLimiter, async (req, res) => {
     const { email, contraseña } = req.body;
 
     if (email === undefined || email === null || String(email).trim() === '') {
@@ -154,7 +154,7 @@ router.post('/recuperar-clave', authRateLimiter, async (req, res) => {
 });
 
 // LOGIN CON CÓDIGO - login directo con código de verificación (sin cambiar contraseña)
-router.post('/login-con-codigo', authRateLimiter, async (req, res) => {
+router.post('/login-con-codigo', authRateLimiter, credentialRateLimiter, async (req, res) => {
     const { email, codigo } = req.body;
 
     if (!email || typeof email !== 'string' || !isValidEmail(email)) {
@@ -190,7 +190,7 @@ router.post('/login-con-codigo', authRateLimiter, async (req, res) => {
 });
 
 // RESTABLECER CLAVE - validar código y cambiar contraseña
-router.post('/restablecer-clave', authRateLimiter, async (req, res) => {
+router.post('/restablecer-clave', authRateLimiter, credentialRateLimiter, async (req, res) => {
     const { email, codigo, contraseña } = req.body;
 
     if (!email || typeof email !== 'string' || !isValidEmail(email)) {
@@ -471,7 +471,7 @@ router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), asy
 // Quien cambia su propia contraseña tiene que enviar la actual (contraseñaActual): una
 // sesión robada no alcanza para quedarse con la cuenta. El limitador frena probar la
 // actual por fuerza bruta con esa sesión.
-router.patch('/:id/contrasenia', authRateLimiter, authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
+router.patch('/:id/contrasenia', authRateLimiter, credentialRateLimiter, authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
     const { id } = req.params;
 
     const { contraseña, contraseñaActual } = req.body;
