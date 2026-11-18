@@ -44,7 +44,7 @@ app.use('/sedes', auth, sedes);
 app.use('/usuarios', usuarios);
 app.use('/reservas', auth, reservas);
 app.use((err, req, res, next) => res.status(err.statusCode || 500).json({ message: err.message }));
-const token = (id, claims = {}) => `Bearer ${jwt.sign({ ...claims, id }, process.env.JWT_SECRET)}`;
+const token = (id, claims = {}) => `Bearer ${jwt.sign({ token_version: 7, ...claims, id }, process.env.JWT_SECRET)}`;
 const call = (method, url, actor = 1, body = {}, claims = {}) => {
   const req = request(app)[method](url);
   if (actor) req.set('Authorization', token(actor, claims));
@@ -130,7 +130,7 @@ for (const body of [{ nombre: 'Intruso' }, { email: 'intruso@test.test' }, { id_
 for (const alias of ['contrasenia']) {
   for (const [actor, target] of [[2, 8], [1, 9]]) test(`clave ${alias}: actor ${actor} no cambia usuario ${target} fuera de alcance`, async () => {
     const before = await snapshot();
-    const res = await call('patch', `/usuarios/${target}/${alias}`, actor, { contraseña: 'Segura12!!' });
+    const res = await call('patch', `/usuarios/${target}/${alias}`, actor, { contraseña: 'SeGura12!!' });
     assert.equal(res.status, 404, res.text);
     assert.deepEqual(await snapshot(), before);
     assert.equal(emails, 0);
@@ -168,7 +168,7 @@ for (const operation of ['perfil', 'clave']) test(`edicion original ${operation}
   await db.query('UPDATE usuarios SET id_empresa=10,id_sede=101 WHERE id=4');
   const before = await snapshot();
   const res = operation === 'perfil' ? await call('put', '/usuarios/4', 2, { id_rol: 2 }) :
-    await call('patch', '/usuarios/4/contrasenia', 2, { contraseña: 'Segura12!!' });
+    await call('patch', '/usuarios/4/contrasenia', 2, { contraseña: 'SeGura12!!' });
   assert.equal(res.status, 403, res.text);
   assert.deepEqual(await snapshot(), before);
   assert.equal(emails, 0);
@@ -183,10 +183,12 @@ for (const actor of [7, 5, 6]) {
     assert.equal(res.body.nombre, 'Mi nombre');
   });
   test(`clave propia: rol de usuario ${actor} conserva operacion`, async () => {
-    const res = await call('patch', `/usuarios/${actor}/contrasenia`, actor, { contraseña: 'Segura12!!' });
+    await db.query('UPDATE usuarios SET contraseña=$1 WHERE id=$2', [await bcrypt.hash('Actual12!!AA', 4), actor]);
+    const res = await call('patch', `/usuarios/${actor}/contrasenia`, actor,
+      { contraseña: 'SeGura12!!', contraseñaActual: 'Actual12!!AA' });
     assert.equal(res.status, 200, res.text);
     const current = (await db.query('SELECT * FROM usuarios WHERE id=$1', [actor])).rows[0];
-    assert.equal(await bcrypt.compare('Segura12!!', current.contraseña), true);
+    assert.equal(await bcrypt.compare('SeGura12!!', current.contraseña), true);
     assert.equal(current.token_version, 8);
     assert.equal(current.UpdateBy, actor);
     assert.equal((await db.query('SELECT * FROM refresh_sessions WHERE usuario_id=$1', [actor])).rows.length, 0);
@@ -194,13 +196,15 @@ for (const actor of [7, 5, 6]) {
   });
 }
 for (const [actor, target] of [[2, 7], [4, 9]]) test(`clave autorizada: admin ${actor} conserva operacion sobre ${target}`, async () => {
-  assert.equal((await call('patch', `/usuarios/${target}/contrasenia`, actor, { contraseña: 'Segura12!!' })).status, 200);
+  assert.equal((await call('patch', `/usuarios/${target}/contrasenia`, actor, { contraseña: 'SeGura12!!' })).status, 200);
 });
 for (const path of ['/usuarios/8', '/usuarios/8/contrasenia']) test(`edicion original: sin sesion/rol ajeno ${path}`, async () => {
   const method = path.endsWith('contrasenia') ? 'patch' : 'put';
+  // El PUT ya no acepta contraseña (400): se prueba la autorización con un cambio de perfil.
+  const body = method === 'patch' ? { contraseña: 'SeGura12!!' } : { nombre: 'Otro' };
   const before = await snapshot();
-  assert.equal((await call(method, path, null, { nombre: 'Otro', contraseña: 'Segura12!!' })).status, 401);
-  assert.equal((await call(method, path, 5, { nombre: 'Otro', contraseña: 'Segura12!!' })).status, 403);
+  assert.equal((await call(method, path, null, body)).status, 401);
+  assert.equal((await call(method, path, 5, body)).status, 403);
   assert.deepEqual(await snapshot(), before);
 });
 for (const operation of ['perfil', 'clave']) for (const field of ['id_sede', 'id_empresa']) test(`edicion concurrente ${operation}: ${field} cambia antes del bloqueo del usuario`, { timeout: 5000 }, async () => {
@@ -208,7 +212,7 @@ for (const operation of ['perfil', 'clave']) for (const field of ['id_sede', 'id
   const gate = { started: Promise.withResolvers(), release: Promise.withResolvers() };
   connectionGate = gate;
   const pending = (operation === 'perfil' ? call('put', '/usuarios/8', 2, { nombre: 'No debe escribirse', id_sede: 101 }) :
-    call('patch', '/usuarios/8/contrasenia', 2, { contraseña: 'Segura12!!' })).then(r => r);
+    call('patch', '/usuarios/8/contrasenia', 2, { contraseña: 'SeGura12!!' })).then(r => r);
   let before;
   try {
     await gate.started.promise;
@@ -241,7 +245,7 @@ test('clave: fallo al revocar sesiones revierte clave, tokens y auditoria, sin n
     FOR EACH ROW EXECUTE FUNCTION fail_password_sessions();`);
   const before = await snapshot();
   try {
-    const res = await call('patch', '/usuarios/7/contrasenia', 2, { contraseña: 'Segura12!!' });
+    const res = await call('patch', '/usuarios/7/contrasenia', 2, { contraseña: 'SeGura12!!' });
     assert.equal(res.status, 500, res.text);
     assert.deepEqual(await snapshot(), before);
     assert.equal(emails, 0);
@@ -254,15 +258,15 @@ test('recupero interno conserva cambio de clave con codigo valido y rechaza codi
   await db.query("INSERT INTO password_reset_codes(id_usuario,codigo_hash,expires_at) VALUES(7,$1,'2099-01-01')", [hash]);
   const before = await snapshot();
   const invalid = await call('post', '/usuarios/restablecer-clave', null, {
-    email: 'e1@test.test', codigo: '654321', contraseña: 'Segura12!!' });
+    email: 'e1@test.test', codigo: '654321', contraseña: 'SeGura12!!' });
   assert.equal(invalid.status, 400, invalid.text);
   assert.deepEqual(await snapshot(), before);
   assert.equal(emails, 0);
   const valid = await call('post', '/usuarios/restablecer-clave', null, {
-    email: 'e1@test.test', codigo: '123456', contraseña: 'Segura12!!' });
+    email: 'e1@test.test', codigo: '123456', contraseña: 'SeGura12!!' });
   assert.equal(valid.status, 200, valid.text);
   const current = (await db.query('SELECT * FROM usuarios WHERE id=7')).rows[0];
-  assert.equal(await bcrypt.compare('Segura12!!', current.contraseña), true);
+  assert.equal(await bcrypt.compare('SeGura12!!', current.contraseña), true);
   assert.equal(current.token_version, 8);
   assert.equal((await db.query('SELECT * FROM refresh_sessions WHERE usuario_id=7')).rows.length, 0);
   assert.equal((await db.query('SELECT usado FROM password_reset_codes')).rows[0].usado, true);
@@ -495,7 +499,7 @@ test('servicios: actor ausente no habilita escrituras internas globales', async 
   for (const op of [() => s.createAsync({ nombre: 'Intrusa', id_empresa: 10 }),
     () => s.updateAsync(101, { nombre: 'Intrusa' }), () => s.deleteAsync(101),
     () => u.updateEstadoAsync(7, false), () => u.deleteAsync(7),
-    () => u.updateAsync(7, { nombre: 'Intruso' }), () => u.updateContraseñaAsync(7, 'Segura12!!'),
+    () => u.updateAsync(7, { nombre: 'Intruso' }), () => u.updateContraseñaAsync(7, 'SeGura12!!'),
     () => r.cancelarAsync(1), () => r.deleteAsync(1), () => r.liberarRetencionAsync(1)]) {
     await assert.rejects(op, { statusCode: 401 });
   }

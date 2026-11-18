@@ -39,7 +39,7 @@ app.use('/api/garage', auth, garageRouter);
 app.use((err, req, res, next) => res.status(err.statusCode || 500).json({ message: err.message }));
 const call = (direction, garage = 1, actor = 5, body = {}, claims = {}) => {
   const req = request(app).post(`/api/garage/${garage}/${direction}-no-reserva`);
-  if (actor) req.set('Authorization', `Bearer ${jwt.sign({ ...claims, id: actor }, process.env.JWT_SECRET)}`);
+  if (actor) req.set('Authorization', `Bearer ${jwt.sign({ token_version: 7, ...claims, id: actor }, process.env.JWT_SECRET)}`);
   return req.send(body);
 };
 const snapshot = async () => {
@@ -131,7 +131,7 @@ for (const direction of ['ingreso','egreso']) {
     assert.deepEqual(await snapshot(), before);
   });
   test(`${direction}: un trato permite leer pero no controlar ocupacion`, async () => {
-    const token = jwt.sign({ id: 1 }, process.env.JWT_SECRET);
+    const token = jwt.sign({ id: 1, token_version: 7 }, process.env.JWT_SECRET);
     const read = await request(app).get('/api/garage/7').set('Authorization', `Bearer ${token}`);
     assert.equal(read.status, 200, read.text);
     const before = await snapshot();

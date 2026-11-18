@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import UsuarioService from './../services/usuarioService.js';
-import { idParam, isValidId, isValidEmail, isValidString, isValidPassword, isValidPhone, isValidStrongPassword } from '../helpers/validatorHelper.js';
+import { idParam, isValidId, isValidEmail, isValidString, isValidPhone, isValidStrongPassword, PASSWORD_POLICY_MESSAGE } from '../helpers/validatorHelper.js';
 import authMiddleware from '../middlewares/authMiddleware.js';
 import { validateReservationLimit } from '../helpers/reservationPolicy.js';
 import { ROLE_NAMES } from '../helpers/roles.js';
@@ -199,8 +199,8 @@ router.post('/restablecer-clave', authRateLimiter, async (req, res) => {
     if (!codigo || typeof codigo !== 'string' || !/^\d{6}$/.test(codigo)) {
         throwError('El código debe ser numérico de 6 dígitos.', 400);
     }
-    if (!contraseña || !isValidPassword(contraseña)) {
-        throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
+    if (!contraseña || !isValidStrongPassword(contraseña)) {
+        throwError(PASSWORD_POLICY_MESSAGE, 400);
     }
 
     const result = await svc.restablecerClaveAsync(email.trim().toLowerCase(), codigo, contraseña);
@@ -221,6 +221,7 @@ router.post('/impersonate', authMiddleware, requireRole(4), async (req, res) => 
         id_rol: usuarioSinContraseña.id_rol,
         id_empresa: usuarioSinContraseña.id_empresa,
         id_sede: usuarioSinContraseña.id_sede,
+        token_version: usuarioSinContraseña.token_version,
         impersonated_by: req.usuario.id,
     }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
 
@@ -244,6 +245,7 @@ router.post('/stop-impersonate', authMiddleware, async (req, res) => {
         id_rol: usuarioSinContraseña.id_rol,
         id_empresa: usuarioSinContraseña.id_empresa,
         id_sede: usuarioSinContraseña.id_sede,
+        token_version: usuarioSinContraseña.token_version,
     }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '15m' });
     res.cookie('access_token', accessToken, {
         httpOnly: true,
@@ -279,33 +281,10 @@ router.get('/:id', authMiddleware, async (req, res) => {
     res.status(200).json(sinContraseña(data));
 });
 
-// REGISTRO PUBLICO (sin autenticacion) - crea cuentas de rol cliente/empleado (2)
-// El rol y los campos de tenant SIEMPRE los decide el servidor, nunca el cliente.
-router.post('/register', authRateLimiter, async (req, res) => {
-    const { nombre, apellido, email, contraseña } = req.body || {};
-    if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
-    if (!isValidString(apellido)) throwError('El apellido es requerido.', 400);
-    if (!isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
-    if (!isValidPassword(contraseña)) throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
-
-    const rolCliente = await svc.rolService.getByIdAsync(2);
-    if (!rolCliente || !['cliente', 'empleado'].includes(String(rolCliente.tipo_rol || '').toLowerCase())) {
-        throwError('Error de configuración: el rol público de registro no está disponible.', 500);
-    }
-
-    const data = await svc.createAsync({
-        id_rol: 2,
-        nombre: String(nombre).trim(),
-        apellido: String(apellido).trim(),
-        email: String(email).trim().toLowerCase(),
-        contraseña,
-        id_sede: null,
-        id_empresa: null,
-        activo: true
-    });
-    const { contraseña: _hash, ...usuarioSinContraseña } = data;
-    res.status(201).json(usuarioSinContraseña);
-});
+// No hay registro público de empleados: un empleado siempre lo da de alta el admin
+// de su empresa (POST /api/usuario). El antiguo POST /register no lo usaba el
+// frontend y regalaba una sesión a cualquiera, que era el primer paso del CRITICO
+// de reembolsos del informe.
 
 // REGISTRO PUBLICO DE DUEÑO DE GARAGE (sin autenticacion) - crea la cuenta e inicia sesión.
 // El rol y los campos de tenant SIEMPRE los decide el servidor, nunca el cliente.
@@ -372,7 +351,7 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
     if (!isValidString(nombre)) throwError('El nombre es requerido.', 400);
     if (!isValidString(apellido)) throwError('El apellido es requerido.', 400);
     if (!isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
-    if (!isValidPassword(contraseña)) throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
+    if (!isValidStrongPassword(contraseña)) throwError(PASSWORD_POLICY_MESSAGE, 400);
     if (!isValidId(id_rol)) throwError('El id_rol es requerido y debe ser un número válido.', 400);
     const rolSolicitado = await svc.rolService.getByIdAsync(Number(id_rol));
     if (!rolSolicitado) throwError('El rol indicado no existe.', 400);
@@ -438,8 +417,14 @@ router.post('', authMiddleware, requireRole(1, 4), async (req, res) => {
             if (!sede) throwError('La sede indicada no pertenece a tu organización.', 403);
         }
         if (req.body.id_garage) {
+            // Un garagista registra ingresos y ve las reservas de todas las empresas que
+            // usan su garage. Un admin solo puede asignarlo al garage propio de una sede
+            // suya; ver el garage por un trato no alcanza (sería personal de un tercero).
             const garage = await svc.garageService.getByIdAsync(req.body.id_garage, req.usuario);
-            if (!garage) throwError('El garage indicado no pertenece a tu organización.', 403);
+            const sedePropia = garage?.id_sede_propia
+                ? await svc.sedeService.getByIdAsync(garage.id_sede_propia, req.usuario)
+                : null;
+            if (!garage || !sedePropia) throwError('El garage indicado no pertenece a tu organización.', 403);
         }
     }
 
@@ -470,7 +455,11 @@ router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), asy
     if (id_empresa && !isValidId(String(id_empresa))) throwError('La empresa debe ser un número válido.', 400);
     if (telefono && !isValidPhone(telefono)) throwError('El teléfono debe contener solo dígitos (mínimo 7).', 400);
     if (email && !isValidEmail(email)) throwError('El email no tiene un formato válido.', 400);
-    if (contraseña && !isValidPassword(contraseña)) throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
+    // Una sola puerta para la contraseña: PATCH /:id/contrasenia valida la actual y
+    // revoca las sesiones. Por PUT se podía cambiar sin ninguna de las dos cosas.
+    if (contraseña !== undefined) {
+        throwError('Para cambiar la contraseña usá PATCH /api/usuario/:id/contrasenia.', 400);
+    }
 
     const data = await svc.updateAsync(id, req.body, req.usuario);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
@@ -479,15 +468,21 @@ router.put('/:id', authMiddleware, requireRole(1, 2, 3, 4, 'dueño_garage'), asy
 
 // UPDATE CONTRASEÑA (PATCH) - admin, smartlot o el propio usuario.
 // La ruta canónica es ASCII: un segmento con ñ viaja percent-encoded y obligaba a mantener alias.
-router.patch('/:id/contrasenia', authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
+// Quien cambia su propia contraseña tiene que enviar la actual (contraseñaActual): una
+// sesión robada no alcanza para quedarse con la cuenta. El limitador frena probar la
+// actual por fuerza bruta con esa sesión.
+router.patch('/:id/contrasenia', authRateLimiter, authMiddleware, requireRoleOrSelf(1, 4), async (req, res) => {
     const { id } = req.params;
 
-    const { contraseña } = req.body;
-    if (!contraseña || !isValidPassword(contraseña)) {
-        throwError('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.', 400);
+    const { contraseña, contraseñaActual } = req.body;
+    if (!contraseña || !isValidStrongPassword(contraseña)) {
+        throwError(PASSWORD_POLICY_MESSAGE, 400);
+    }
+    if (contraseñaActual !== undefined && typeof contraseñaActual !== 'string') {
+        throwError('La contraseña actual debe ser texto.', 400);
     }
 
-    const data = await svc.updateContraseñaAsync(id, contraseña, req.usuario);
+    const data = await svc.updateContraseñaAsync(id, contraseña, req.usuario, contraseñaActual);
     if (!data) throwError('No encontrado: El usuario con ese ID no existe.', 404);
     res.status(200).json({ message: 'Contraseña actualizada exitosamente.' });
 });

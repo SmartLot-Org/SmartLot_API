@@ -350,15 +350,20 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
                 entity.id_empresa = null;
             }
 
-            // Merge: preservar valores actuales para campos no enviados
-            const merged = { ...current, ...entity };
-
-            // Preservar contraseña existente si no se envía una nueva
-            if (entity.contraseña) {
-                merged.contraseña = await bcrypt.hash(entity.contraseña, BCRYPT_ROUNDS);
-            } else {
-                merged.contraseña = current.contraseña;
+            // El email es la identidad de login y el destino del código de recupero: si
+            // alguien con una sesión ajena lo cambiara, después podría quedarse con la
+            // cuenta por "olvidé mi contraseña". Uno mismo lo cambia con la contraseña actual.
+            const { contraseñaActual } = entity;
+            delete entity.contraseñaActual;
+            const emailCambia = entity.email !== undefined &&
+                String(entity.email).trim().toLowerCase() !== String(current.email ?? '').trim().toLowerCase();
+            if (emailCambia && Number(requestingUser.id) === Number(current.id)) {
+                await this._exigirContraseñaActualAsync(current, contraseñaActual);
             }
+
+            // Merge: preservar valores actuales para campos no enviados. La contraseña
+            // nunca cambia por acá (ver PATCH /:id/contrasenia).
+            const merged = { ...current, ...entity, contraseña: current.contraseña };
 
             const destination = await this.repo.validateEditDestinationAsync(merged, client);
             authorizeUserEditDestination(scope, merged, destination);
@@ -382,11 +387,14 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
         return this._changeLifecycleAsync(id, requestingUser, false, activo);
     }
 
-    updateContraseñaAsync = async (id, contraseña, requestingUser) => {
+    updateContraseñaAsync = async (id, contraseña, requestingUser, contraseñaActual) => {
         let current;
         const result = await this._withAuthorizedUserEdit(id, requestingUser, async (target, scope, client) => {
             current = target;
             await this._aplicarReglasDeActualizacion({}, requestingUser, target, client);
+            if (Number(requestingUser.id) === Number(target.id)) {
+                await this._exigirContraseñaActualAsync(target, contraseñaActual);
+            }
             const hash = await bcrypt.hash(contraseña, BCRYPT_ROUNDS);
             const updated = await this.repo.updateContraseñaAsync(id, hash, scope, client);
             if (!updated) throw httpError('El usuario cambio durante la operacion.', 409);
@@ -491,6 +499,12 @@ await enviarCorreoDesdePlantilla(nuevoUsuario.email, 'bienvenida', { nombre: nom
             error.statusCode = 400;
             throw error;
         }
+    }
+
+    _exigirContraseñaActualAsync = async (usuario, contraseñaActual) => {
+        const coincide = typeof contraseñaActual === 'string' && contraseñaActual.length > 0 &&
+            await bcrypt.compare(contraseñaActual, usableLoginHash(usuario.contraseña) ? usuario.contraseña : await LOGIN_DUMMY_HASH);
+        if (!coincide) throw httpError('La contraseña actual no es correcta.', 400, 'CURRENT_PASSWORD_INVALID');
     }
 
     _withAuthorizedUserEdit = async (id, actor, operation) => {

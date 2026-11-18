@@ -1,6 +1,11 @@
 import jwt from 'jsonwebtoken';
 import pool from '../database/db.js';
 
+function clearSessionCookies(res) {
+    res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
+    res.clearCookie('refresh_session_id', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/api/usuario/refresh' });
+}
+
 const authMiddleware = async (req, res, next) => {
     let token = null;
     const authHeader = req.headers.authorization;
@@ -25,15 +30,14 @@ const authMiddleware = async (req, res, next) => {
     try {
         tokenUsuario = jwt.verify(token, process.env.JWT_SECRET);
     } catch {
-        res.clearCookie('access_token', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
-        res.clearCookie('refresh_session_id', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/api/usuario/refresh' });
+        clearSessionCookies(res);
         return res.status(401).json({ error: true, message: 'Token invalido o expirado.', statusCode: 401 });
     }
 
     // Fuera del try del JWT: si la base falla no sabemos nada del token, así que
     // el rechazo sube al errorHandler como 500 y la sesión del usuario queda intacta.
     const usuarioResult = await pool.query(
-        `SELECT u.id_rol, u.id_empresa, u.id_sede, r.tipo_rol,
+        `SELECT u.id_rol, u.id_empresa, u.id_sede, r.tipo_rol, u.token_version,
                 g.id_garage, COALESCE(g.id_garages, '{}'::int[]) AS id_garages
          FROM usuarios u
          INNER JOIN roles r ON r.id = u.id_rol
@@ -51,6 +55,13 @@ const authMiddleware = async (req, res, next) => {
     );
     if (!usuarioResult.rows[0]) {
         return res.status(401).json({ error: true, message: 'El usuario no existe o esta inactivo.', statusCode: 401 });
+    }
+    // Logout, cambio o restablecimiento de contraseña, desactivación y baja suben
+    // token_version. Sin esta comparación un access token robado seguía sirviendo
+    // hasta que vencía (15 min) aunque la sesión ya estuviera revocada.
+    if (Number(tokenUsuario.token_version ?? 0) !== Number(usuarioResult.rows[0].token_version ?? 0)) {
+        clearSessionCookies(res);
+        return res.status(401).json({ error: true, message: 'La sesión fue revocada. Iniciá sesión de nuevo.', statusCode: 401 });
     }
     req.usuario = {
         ...tokenUsuario,

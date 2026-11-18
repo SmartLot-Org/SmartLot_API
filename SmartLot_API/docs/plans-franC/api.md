@@ -54,7 +54,7 @@ Cómo leerlo: **Acceso** es `pública`, `sesión` (cualquier rol autenticado) o 
 
 <!-- INVENTARIO:INICIO (generado por scripts/generate-api-inventory.mjs; no editar a mano) -->
 
-Roles: 1 admin · 2 empleado (cliente) · 3 garagista · 4 superadmin · 5 dueño de garage. Total: 137 endpoints en 18 módulos.
+Roles: 1 admin · 2 empleado (cliente) · 3 garagista · 4 superadmin · 5 dueño de garage. Total: 136 endpoints en 18 módulos.
 
 ### `/api/empresa`
 
@@ -168,7 +168,6 @@ Roles: 1 admin · 2 empleado (cliente) · 3 garagista · 4 superadmin · 5 dueñ
 | GET | `/api/usuario/me` | sesión | 200 | 401, 500 |
 | GET | `/api/usuario/auditoria` | roles 4 | 200 | 401, 403, 500 |
 | GET | `/api/usuario/:id` | sesión | 200 | 400, 401, 403, 404, 500 |
-| POST | `/api/usuario/register` | pública | 201 | 400, 500 |
 | POST | `/api/usuario/register-dueno-garage` | pública | 201 | 400, 500 |
 | POST | `/api/usuario` | roles 1, 4 | 201 | 400, 401, 403, 500 |
 | PATCH | `/api/usuario/:id/limite-reservas` | roles 1, 4 | 200 | 400, 401, 403, 500 |

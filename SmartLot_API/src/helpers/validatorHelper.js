@@ -48,18 +48,14 @@ export const isValidString = (str, minLength = 1) => {
 };
 
 /**
- * Valida si la contraseña cumple con los requisitos mínimos (ej. al menos 6 caracteres).
+ * Política única de contraseñas, la misma que piden los formularios del frontend:
+ * al menos 8 caracteres, 2 mayúsculas, 2 números y 2 caracteres especiales.
+ * La usan todas las vías que fijan una contraseña (registro, alta interna, edición,
+ * cambio y restablecimiento): antes el alta interna y el cambio aceptaban una más
+ * débil que la que mostraba la pantalla.
  */
-export const isValidPassword = (password) => {
-    if (typeof password !== 'string') return false;
-    return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(password);
-};
+export const PASSWORD_POLICY_MESSAGE = 'La contraseña debe tener al menos 8 caracteres, 2 mayúsculas, 2 números y 2 caracteres especiales.';
 
-/**
- * Valida si la contraseña cumple la política reforzada del registro público:
- * al menos 8 caracteres, 2 mayúsculas, 2 números y 2 caracteres especiales
- * (mismo criterio que el alta interna de usuarios).
- */
 export const isValidStrongPassword = (password) => {
     if (typeof password !== 'string' || password.length < 8) return false;
     const especiales = (password.match(/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/g) || []).length;
@@ -67,6 +63,8 @@ export const isValidStrongPassword = (password) => {
     const mayusculas = (password.match(/[A-Z]/g) || []).length;
     return especiales >= 2 && numeros >= 2 && mayusculas >= 2;
 };
+
+export const isValidPassword = isValidStrongPassword;
 
 /**
  * Valida si una fecha es parseable y válida.

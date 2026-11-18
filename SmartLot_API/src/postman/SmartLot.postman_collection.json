@@ -460,42 +460,6 @@
                     "response": []
                 },
                 {
-                    "name": "POST /usuario/register",
-                    "request": {
-                        "method": "POST",
-                        "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            }
-                        ],
-                        "url": {
-                            "raw": "{{url}}/usuario/register",
-                            "host": [
-                                "{{url}}"
-                            ],
-                            "path": [
-                                "usuario",
-                                "register"
-                            ]
-                        },
-                        "description": "Pública. Éxito: 201. Ver docs/plans-franC/api.md.",
-                        "body": {
-                            "mode": "raw",
-                            "raw": "{\n  \"nombre\": \"Ana\",\n  \"apellido\": \"Pérez\",\n  \"email\": \"ana@example.com\",\n  \"contraseña\": \"Segura12\"\n}",
-                            "options": {
-                                "raw": {
-                                    "language": "json"
-                                }
-                            }
-                        },
-                        "auth": {
-                            "type": "noauth"
-                        }
-                    },
-                    "response": []
-                },
-                {
                     "name": "POST /usuario/register-dueno-garage",
                     "request": {
                         "method": "POST",
@@ -553,7 +517,7 @@
                         "description": "Roles 1, 4. Éxito: 201. Ver docs/plans-franC/api.md.",
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"id_rol\": 2,\n  \"nombre\": \"Ana\",\n  \"apellido\": \"Pérez\",\n  \"email\": \"ana@example.com\",\n  \"contraseña\": \"Segura12!!\",\n  \"id_sede\": 1,\n  \"id_empresa\": 1,\n  \"activo\": true\n}",
+                            "raw": "{\n  \"id_rol\": 2,\n  \"nombre\": \"Ana\",\n  \"apellido\": \"Pérez\",\n  \"email\": \"ana@example.com\",\n  \"contraseña\": \"SeGura12!!\",\n  \"id_sede\": 1,\n  \"id_empresa\": 1,\n  \"activo\": true\n}",
                             "options": {
                                 "raw": {
                                     "language": "json"
@@ -654,7 +618,7 @@
                         "description": "Roles 1, 4 (o el propio usuario). Éxito: 200. Ver docs/plans-franC/api.md.",
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"contraseña\": \"Segura12\"\n}",
+                            "raw": "{\n  \"contraseña\": \"SeGura12!!\",\n  \"contraseñaActual\": \"{{password}}\"\n}",
                             "options": {
                                 "raw": {
                                     "language": "json"
@@ -3150,7 +3114,7 @@
                         "description": "Pública. Éxito: 202. Ver docs/plans-franC/api.md.",
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n  \"nombre\": \"Ana\",\n  \"apellido\": \"Pérez\",\n  \"email\": \"ana@example.com\",\n  \"telefono\": \"1155551234\",\n  \"contraseña\": \"Segura12!!\"\n}",
+                            "raw": "{\n  \"nombre\": \"Ana\",\n  \"apellido\": \"Pérez\",\n  \"email\": \"ana@example.com\",\n  \"telefono\": \"1155551234\",\n  \"contraseña\": \"SeGura12!!\"\n}",
                             "options": {
                                 "raw": {
                                     "language": "json"

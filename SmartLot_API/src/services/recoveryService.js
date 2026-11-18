@@ -5,6 +5,7 @@ import pool from '../database/db.js';
 import RecoveryRepository from '../repositories/recoveryRepository.js';
 import { enviarCorreoDesdePlantilla } from './emailService.js';
 import { RECOVERY_POLICY, RECOVERY_MESSAGE, INVALID_RECOVERY_MESSAGE } from '../config/recoveryPolicy.js';
+import { isValidStrongPassword, PASSWORD_POLICY_MESSAGE } from '../helpers/validatorHelper.js';
 
 const rounds = parseInt(process.env.BCRYPT_ROUNDS || '12',10);
 const invalid = (statusCode) => Object.assign(new Error(INVALID_RECOVERY_MESSAGE), { statusCode });
@@ -85,8 +86,8 @@ export default class RecoveryService {
     },401);
 
     reset = async (email, code, password) => {
-        if (typeof password !== 'string' || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(password)) {
-            throw Object.assign(new Error('La contraseña debe tener al menos 8 caracteres, mayúsculas, minúsculas y números.'),{statusCode:400});
+        if (!isValidStrongPassword(password)) {
+            throw Object.assign(new Error(PASSWORD_POLICY_MESSAGE),{statusCode:400});
         }
         const user = await this.use(email,code,async (user,client) => {
             await this.repo.resetPassword(user.id,await bcrypt.hash(password,rounds),client);

@@ -59,7 +59,7 @@ app.use('/api/usuario', router);
 app.use((err, req, res, next) => res.status(err.statusCode || 500).json({ message: err.statusCode ? err.message : 'Error interno' }));
 const post = (path, codigo = '123456', extra = {}) => request(app).post(`/api/usuario/${path}`)
   .set('X-Forwarded-For',`198.18.${Math.floor(++ip/250)}.${ip%250+1}`)
-  .send({ email: 'cuenta@test.test', codigo, contraseña: 'NuevaClave12!', ...extra });
+  .send({ email: 'cuenta@test.test', codigo, contraseña: 'NuevaClave12!!', ...extra });
 const state = async () => ({
   users: (await db.query('SELECT * FROM usuarios ORDER BY id')).rows,
   sessions: (await db.query('SELECT * FROM refresh_sessions ORDER BY id')).rows
@@ -295,9 +295,9 @@ test('restablecimiento legitimo cambia password y version, revoca sesiones y per
   const { users,sessions } = await state();
   const user = users.find(u=>u.id===9);
   assert.equal(user.token_version,8); assert.equal(sessions.length,0);
-  assert.equal(await bcrypt.compare('NuevaClave12!',user.contraseña),true);
+  assert.equal(await bcrypt.compare('NuevaClave12!!',user.contraseña),true);
   assert.equal((await post('login',undefined,{contraseña:'Anterior12!'})).status,401);
-  assert.equal((await post('login',undefined,{contraseña:'NuevaClave12!'})).status,200);
+  assert.equal((await post('login',undefined,{contraseña:'NuevaClave12!!'})).status,200);
   assert.equal((await post('restablecer-clave')).status,400);
 });
 
