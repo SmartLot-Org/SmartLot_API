@@ -540,7 +540,13 @@ export default class ReservaService {
 
         if (Number(requestingUser?.id_rol) !== 4) {
             const garageAutorizado = await this.garageService.getByIdAsync(reserva.id_garage, requestingUser);
-            if (!garageAutorizado) {
+            // Un admin ve el garage por el trato de su empresa, pero en ese garage también
+            // estacionan otras empresas: solo opera reservas de su empresa (y de su sede),
+            // el mismo alcance con el que control-acceso se las muestra. El egreso genera
+            // el consumo que se factura, así que no puede tocar el de otra empresa.
+            const reservaEnAlcance = Number(requestingUser?.id_rol) !== 1 ||
+                Boolean(await this.repo.getByIdAsync(reserva.id, requestingUser));
+            if (!garageAutorizado || !reservaEnAlcance) {
                 const message = Number(requestingUser?.id_rol) === 3
                     ? 'No tiene permisos para operar reservas de otro garage.'
                     : 'No tiene permisos para operar reservas de otra organizacion.';

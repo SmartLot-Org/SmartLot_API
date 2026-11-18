@@ -273,3 +273,13 @@ test('login: 10 intentos fallidos sobre la misma cuenta la bloquean 15 min sin a
   assert.equal((await request(app).post('/usuarios/login').send({ email: 'e9@test.test', contraseña: 'Actual12!!AA' })).status, 429);
   assert.equal((await intento('e10@test.test')).status, 401);
 });
+
+test('check-in: un admin no registra el ingreso de una reserva de otra empresa en un garage con trato compartido', async () => {
+  const ajena = await reserva({ id_usuario: 9, id_vehiculo: 19 });
+  const before = await rows('reservas');
+  const res = await call('post', `/reservas/${ajena}/check-in`, 1, { patente: 'CCC333' });
+  assert.equal(res.status, 403, res.text);
+  assert.deepEqual(await rows('reservas'), before);
+  // El admin de la empresa titular sí pasa la autorización (lo que siga depende del horario).
+  assert.notEqual((await call('post', `/reservas/${ajena}/check-in`, 3, { patente: 'CCC333' })).status, 403);
+});
