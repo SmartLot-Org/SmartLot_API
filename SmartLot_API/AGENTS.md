@@ -34,6 +34,13 @@ router.patch('/:id/contrasenia', authMiddleware, requireRoleOrSelf(1, 4), handle
 - New routes: kebab-case, plural, Spanish, ASCII only. Do not rename existing routes (it breaks the frontend).
 - UI/API messages are Spanish. Comments explain the *why* only.
 
+## Authorization conventions (see `docs/auditoria-seguridad.md`)
+- Roles are checked **by ID** (`hasRole` in `src/helpers/roles.js`); names are only aliases of the fixed IDs in `docs/roles.sql`.
+- Every write that has an owner takes its scope from `authorizeWrite` (`src/helpers/writeAuthorization.js`) and repeats it in the SQL with `writeTenantFilter` (also inside the `UPDATE`). Reads use `getTenantCondition` (`ownerColumn` restricts employees to their own rows).
+- Money and derived values (amounts, quota, who pays, weekday) are computed on the server; never trust the request body for them.
+- Changing your own password or email requires `contraseñaActual`; one password policy (`isValidStrongPassword`).
+- Add a PGlite reproduction to `test/seg11-autorizacion-sql.integration.test.js` (or a sibling) for any new authorization rule.
+
 ## Test Command
 ```bash
 npm test                 # full suite without real services; node:test, ~25 s

@@ -283,7 +283,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
 // No hay registro público de empleados: un empleado siempre lo da de alta el admin
 // de su empresa (POST /api/usuario). El antiguo POST /register no lo usaba el
-// frontend y regalaba una sesión a cualquiera, que era el primer paso del CRITICO
+// frontend y le daba a cualquiera una cuenta con la que iniciar sesión: era el primer paso del CRITICO
 // de reembolsos del informe.
 
 // REGISTRO PUBLICO DE DUEÑO DE GARAGE (sin autenticacion) - crea la cuenta e inicia sesión.
