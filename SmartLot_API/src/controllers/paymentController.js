@@ -18,6 +18,7 @@ import {
   verifyAuthorizedPaymentsByReference
 } from '../services/paymentReadService.js';
 import { readProviderRefundState } from '../services/paymentRefundState.js';
+import { isTotalReversal, releaseReservationAfterReversal } from '../services/reservationPaymentReversal.js';
 import { throwError } from '../helpers/httpError.js';
 import { BAD_REQUEST, CONFLICT, FORBIDDEN, NOT_FOUND, SERVICE_UNAVAILABLE, UNAUTHORIZED } from '../helpers/httpStatus.js';
 
@@ -148,7 +149,10 @@ async function persistPaymentAndConfirmReservation(paymentData) {
         WHERE r.id=$1 FOR UPDATE OF r`, [idReserva]
     )).rows[0] : null;
     await savePaymentRecord(paymentData, reserva?.id_empresa ?? null, client);
-    if (reserva && reserva.estado_reserva === 'pendiente_pago') {
+    if (reserva && reserva.estado_reserva === 'confirmada' && isTotalReversal(paymentData)) {
+      // Contracargo o reembolso total: el pago ya no respalda la reserva.
+      await releaseReservationAfterReversal(client, idReserva);
+    } else if (reserva && reserva.estado_reserva === 'pendiente_pago') {
       const amountMatches = Number(paymentData.transaction_amount) === Number(reserva.importe_estimado);
       const retencionVigente = new Date(reserva.retencion_pago_hasta) > new Date();
       if (paymentData.status === 'approved' && retencionVigente &&
@@ -360,6 +364,9 @@ router.post('/webhook', async (req, res) => {
       if (!payment || String(payment.id) !== paymentId) throwError('Identidad de pago contradictoria en el proveedor.', CONFLICT);
       if (!await syncEnterprisePayment(payment)) {
         await updatePaymentStatus(paymentId, paymentStatusAfterRefund(payment), { refundedAt: new Date().toISOString() });
+        if (payment?.metadata?.id_reserva && isTotalReversal(payment)) {
+          await releaseReservationAfterReversal(pool, payment.metadata.id_reserva);
+        }
       }
     }
 

@@ -4,6 +4,7 @@ import { getPayment, refundPayment } from './mpService.js';
 import { providerPaymentMatchesLocal } from './providerPaymentCorrelationService.js';
 import { CONFIRMED_REFUND_STATUSES, readProviderRefundState } from './paymentRefundState.js';
 import { throwError } from '../helpers/httpError.js';
+import { releaseReservationAfterReversal } from './reservationPaymentReversal.js';
 
 function moneyToCents(value, fieldName) {
   const number = Number(value);
@@ -233,6 +234,11 @@ async function persistConfirmedRefund({ localPayment, refund, actualCents, motiv
       ]
     );
     if (!update.rows[0]) throwError('El pago local dejo de estar disponible.', 409, 'payment_changed');
+    // Reembolso total de un pago de reserva: la reserva no usada se cancela en la
+    // misma transacción (ver reservationPaymentReversal.js).
+    if (paymentStatus === 'refunded' && localPayment.id_reserva) {
+      await releaseReservationAfterReversal(client, localPayment.id_reserva);
+    }
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');

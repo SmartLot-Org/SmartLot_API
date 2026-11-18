@@ -267,7 +267,12 @@ test('superadmin puede reembolsar totalmente un pago valido y se registra el imp
   assert.equal(insert.params[5], 'Cancelacion manual');
   const update = state.writes.find((entry) => entry.sql.includes('UPDATE pagos'));
   assert.equal(update.params[0], 'refunded');
-  assert.equal(state.writes.some((entry) => entry.sql.includes('reservas')), false);
+  // Reembolso total de un pago de reserva: la reserva no usada se cancela en la misma
+  // transacción (antes quedaba confirmada y con QR aunque la plata se devolviera).
+  const release = state.writes.filter((entry) => entry.sql.includes('UPDATE reservas'));
+  assert.equal(release.length, 1);
+  assert.deepEqual(release[0].params, [77]);
+  assert.match(release[0].sql, /COALESCE\(entro, false\) = false/);
 });
 
 test('pago sin preference_id en Payment se correlaciona por merchant order antes de reembolsar', async () => {
