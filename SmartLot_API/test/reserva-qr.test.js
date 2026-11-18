@@ -46,6 +46,8 @@ function qrServiceFixture(overrides = {}) {
 
   svc.repo = {
     expirePendingAsync: async () => 0,
+    // Alcance del admin (reservas de su empresa): la reserva del fixture lo es.
+    getByIdAsync: async (id) => (id === reservation.id ? { ...reservation } : null),
     getQrByIdAsync: async () => reserva,
   };
 
@@ -76,6 +78,8 @@ function checkInFixture() {
 
   svc.repo = {
     expirePendingAsync: async () => 0,
+    // Alcance del admin (reservas de su empresa): la reserva del fixture lo es.
+    getByIdAsync: async (id) => (Number(id) === Number(reservation.id) ? { ...reservation } : null),
     getByQrTokenAsync: async (token, type) => (
       (type === 'ingreso' && token === QR_TOKEN)
       || (type === 'salida' && token === state.exitToken)
