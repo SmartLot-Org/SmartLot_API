@@ -3,7 +3,8 @@ import VehiculoRepository from '../repositories/vehiculoRepository.js';
 import UsuarioService from './usuarioService.js';
 import ModeloService from './modeloService.js';
 import { throwError } from '../helpers/httpError.js';
-import { CONFLICT } from '../helpers/httpStatus.js';
+import { CONFLICT, FORBIDDEN, NOT_FOUND } from '../helpers/httpStatus.js';
+import { authorizeWrite } from '../helpers/writeAuthorization.js';
 
 export default class VehiculoService {
     constructor() {
@@ -17,11 +18,13 @@ export default class VehiculoService {
     
     getByIdAsync = async (id, requestingUser = null) => await this.repo.getByIdAsync(id, requestingUser);
 
+    // Alcance de escritura (helpers/writeAuthorization): superadmin global, admin solo
+    // dentro de su empresa (y de su sede si es admin de sede), empleado solo lo propio.
     createAsync = async (entity, requestingUser) => {
-        const rol = Number(requestingUser.id_rol);
-        if (rol !== 1 && rol !== 4) {
-            entity.id_usuario = requestingUser.id;
-        }
+        entity = { ...entity };
+        const scope = authorizeWrite(requestingUser, true);
+        if (scope.kind === 'own') entity.id_usuario = scope.actorId;
+        await this._assertTitularEnAlcanceAsync(entity.id_usuario, scope);
 
         const { modelo } = await this._validarRelacionesAsync(entity);
         this._asignarTipoVehiculoSegunModelo(entity, modelo);
@@ -41,22 +44,14 @@ export default class VehiculoService {
     }
 
     updateAsync = async (id, entity, requestingUser) => {
-        const rol = Number(requestingUser.id_rol);
-        if (rol !== 1 && rol !== 4) {
-            // Verificar que el vehículo pertenezca al usuario que lo modifica (IDOR).
-            const current = await this.repo.getByIdAsync(id);
-            if (!current) {
-                const error = new Error('No encontrado: El vehículo con ese ID no existe.');
-                error.statusCode = 404;
-                throw error;
-            }
-            if (Number(current.id_usuario) !== Number(requestingUser.id)) {
-                const error = new Error('No tiene permisos para modificar este vehículo.');
-                error.statusCode = 403;
-                throw error;
-            }
-            delete entity.id_usuario;
-        }
+        entity = { ...entity };
+        const scope = authorizeWrite(requestingUser, true);
+        // Un vehículo fuera del alcance responde igual que uno inexistente: no se revela
+        // que existe en otra empresa (antes el admin editaba cualquiera, de cualquier empresa).
+        const current = await this.repo.getForWriteAsync(id, scope);
+        if (!current) throwError('No encontrado: El vehículo con ese ID no existe.', NOT_FOUND);
+        if (scope.kind === 'own') delete entity.id_usuario;
+        if (entity.id_usuario !== undefined) await this._assertTitularEnAlcanceAsync(entity.id_usuario, scope);
 
         // tipo_vehiculo proviene siempre del modelo; nunca se acepta del frontend.
         delete entity.tipo_vehiculo;
@@ -75,10 +70,18 @@ export default class VehiculoService {
             }
         }
 
-        return await this.repo.updateAsync(id, entity);
+        return await this.repo.updateAsync(id, entity, scope);
     }
 
-    deleteAsync = async (id) => await this.repo.deleteAsync(id);
+    deleteAsync = async (id, requestingUser) => this.repo.deleteAsync(id, authorizeWrite(requestingUser, true));
+
+    // El titular de un vehículo tiene que estar dentro del alcance de quien escribe:
+    // un admin no puede crear ni pasar vehículos a usuarios de otra empresa o sede.
+    _assertTitularEnAlcanceAsync = async (idUsuario, scope) => {
+        if (!await this.repo.titularEnAlcanceAsync(idUsuario, scope)) {
+            throwError('El usuario titular no existe o no pertenece a tu organización.', FORBIDDEN);
+        }
+    }
 
     /**
      * Valida que las entidades relacionadas (usuario, modelo) existan en la BD.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import VehiculoService from '../src/services/vehiculoService.js';
 
-const admin = { id: 10, id_rol: 1 };
+const admin = { id: 10, id_rol: 1, id_empresa: 5 };
 
 const modelos = {
   1: { id: 1, nombre: 'Gol', tipo_vehiculo: 'auto' },
@@ -29,6 +29,8 @@ function vehiculoService({ modelo = null, modeloFaltante = null } = {}) {
     getByPatenteIncludingDeletedAsync: async () => null,
     getByPatenteAsync: async () => null,
     getByIdAsync: async (id) => ({ id, id_usuario: 7, id_modelo: 1, patente: 'AB123CD', tipo_vehiculo: 'auto' }),
+    getForWriteAsync: async (id) => ({ id, id_usuario: 7, id_modelo: 1, patente: 'AB123CD', tipo_vehiculo: 'auto' }),
+    titularEnAlcanceAsync: async () => true,
   };
   return { svc, created };
 }

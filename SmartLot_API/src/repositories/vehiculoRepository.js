@@ -1,6 +1,10 @@
 // vehiculoRepository.js
 import pool from '../database/db.js';
 import { getTenantCondition } from '../helpers/tenantFilter.js';
+import { writeTenantFilter } from '../helpers/writeTenantFilter.js';
+
+// Columnas del alcance de escritura: el vehículo pertenece al tenant de su titular.
+const WRITE_COLUMNS = Object.freeze({ company: 'u.id_empresa', site: 'u.id_sede', owner: 'v.id_usuario' });
 
 export default class VehiculoRepository {
     constructor() {
@@ -8,7 +12,7 @@ export default class VehiculoRepository {
     }
 
     getAllAsync = async (requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', ownerColumn: 'v.id_usuario' });
         const result = await pool.query(
             `SELECT v.* FROM vehiculos v
              INNER JOIN usuarios u ON u.id = v.id_usuario
@@ -20,7 +24,7 @@ export default class VehiculoRepository {
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', ownerColumn: 'v.id_usuario' });
         const result = await pool.query(
             `SELECT v.* FROM vehiculos v
              INNER JOIN usuarios u ON u.id = v.id_usuario
@@ -48,7 +52,30 @@ export default class VehiculoRepository {
         return result.rows[0];
     }
 
-    updateAsync = async (id, entity) => {
+    getForWriteAsync = async (id, scope) => {
+        const filter = writeTenantFilter(scope, 2, WRITE_COLUMNS);
+        const result = await pool.query(
+            `SELECT v.* FROM vehiculos v
+             INNER JOIN usuarios u ON u.id = v.id_usuario
+             WHERE v.id = $1 AND COALESCE(v."Borrado", false) = false ${filter.sql}`,
+            [id, ...filter.params]
+        );
+        return result.rows[0] ?? null;
+    }
+
+    titularEnAlcanceAsync = async (idUsuario, scope) => {
+        const filter = writeTenantFilter(scope, 2, { company: 'u.id_empresa', site: 'u.id_sede', owner: 'u.id' });
+        const result = await pool.query(
+            `SELECT 1 FROM usuarios u
+             WHERE u.id = $1 AND COALESCE(u."Borrado", false) = false ${filter.sql}`,
+            [idUsuario, ...filter.params]
+        );
+        return result.rowCount > 0;
+    }
+
+    // El filtro de alcance va también en el UPDATE: entre la lectura del service y
+    // esta escritura el titular podría haber cambiado de empresa.
+    updateAsync = async (id, entity, scope) => {
         const updates = [];
         const values = [];
         for (const column of ['id_usuario', 'id_modelo', 'patente', 'tipo_vehiculo']) {
@@ -57,10 +84,13 @@ export default class VehiculoRepository {
                 updates.push(`${column} = $${values.length}`);
             }
         }
-        if (updates.length === 0) return await this.getByIdAsync(id);
+        if (updates.length === 0) return await this.getForWriteAsync(id, scope);
+        const filter = writeTenantFilter(scope, values.length + 2, WRITE_COLUMNS);
         const result = await pool.query(
-            `UPDATE vehiculos SET ${updates.join(', ')} WHERE id = $${values.length + 1} AND COALESCE("Borrado", false) = false RETURNING *`,
-            [...values, id]
+            `UPDATE vehiculos v SET ${updates.join(', ')} FROM usuarios u
+             WHERE v.id = $${values.length + 1} AND u.id = v.id_usuario
+               AND COALESCE(v."Borrado", false) = false ${filter.sql} RETURNING v.*`,
+            [...values, id, ...filter.params]
         );
         return result.rows[0] ?? null;
     }
@@ -73,8 +103,14 @@ export default class VehiculoRepository {
         return result.rows[0] ?? null;
     }
 
-    deleteAsync = async (id) => {
-        const result = await pool.query('UPDATE vehiculos SET "Borrado" = true WHERE id = $1 AND COALESCE("Borrado", false) = false', [id]);
+    deleteAsync = async (id, scope) => {
+        const filter = writeTenantFilter(scope, 2, WRITE_COLUMNS);
+        const result = await pool.query(
+            `UPDATE vehiculos v SET "Borrado" = true FROM usuarios u
+             WHERE v.id = $1 AND u.id = v.id_usuario
+               AND COALESCE(v."Borrado", false) = false ${filter.sql}`,
+            [id, ...filter.params]
+        );
         return result.rowCount > 0;
     }
 }
