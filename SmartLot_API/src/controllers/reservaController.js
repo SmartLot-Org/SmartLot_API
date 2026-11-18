@@ -94,7 +94,8 @@ router.post('', requireRole(2), async (req, res) => {
     if (!isValidId(String(id_vehiculo))) throwError('El id_vehiculo es requerido y debe ser un número válido.', 400);
     if (!isValidDate(fecha_entrada)) throwError('La fecha de entrada es requerida y debe ser una fecha válida.', 400);
     if (!isValidDate(fecha_salida)) throwError('La fecha de salida es requerida y debe ser una fecha válida.', 400);
-    if (!dia || !isValidDiaSemana(dia)) throwError('El dia es requerido y debe ser un valor valido: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.', 400);
+    // El día lo calcula el servidor desde fecha_entrada; si llega, solo se valida el formato.
+    if (dia !== undefined && !isValidDiaSemana(dia)) throwError('El dia debe ser un valor valido: Lunes, Martes, Miercoles, Jueves, Viernes, Sabado, Domingo.', 400);
 
     const data = await svc.createAsync(body, req.usuario);
     res.status(201).json(data);

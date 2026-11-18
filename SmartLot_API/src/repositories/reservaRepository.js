@@ -23,22 +23,24 @@ export default class ReservaRepository {
             AND ($1::bigint IS NULL OR id=$1) RETURNING id`, [id]
     )).rowCount;
 
-    quoteAndCreateWithClientAsync = async (entity, client, insert = true) => {
-        await this.expirePendingAsync(client);
+    // Cotización: trato, cupo, quién paga, tarifa e importe. Es la misma regla para
+    // crear y para editar (excludeId deja afuera a la reserva que se está editando),
+    // así una edición no puede conservar el importe de otro horario, garage o vehículo.
+    _quoteWithClientAsync = async (entity, client, { lockUser = true, enforceLimit = false, excludeId = null } = {}) => {
         const user = (await client.query(
             `SELECT u.id,u.id_sede,u.limite_reservas_activas,COALESCE(u.id_empresa,s.id_empresa) AS id_empresa
                FROM usuarios u
                LEFT JOIN sedes s ON s.id=u.id_sede AND COALESCE(s."Borrado",false)=false
               WHERE u.id=$1 AND COALESCE(u.activo,true)=true
-                AND COALESCE(u."Borrado",false)=false ${insert ? 'FOR UPDATE OF u' : ''}`,
+                AND COALESCE(u."Borrado",false)=false ${lockUser ? 'FOR UPDATE OF u' : ''}`,
             [entity.id_usuario]
         )).rows[0];
         if (!user) throw Object.assign(new Error('El empleado no existe o esta inactivo.'), { statusCode: 403 });
         // Una consulta separada después del bloqueo ve los inserts ya confirmados
         // por la petición anterior (READ COMMITTED).
-        const current = await this.countActiveByUserAsync(user.id, client);
+        const current = await this.countActiveByUserAsync(user.id, client, excludeId);
         const politicaReservas = reservationPolicy(user.limite_reservas_activas, current);
-        if (insert) enforceReservationLimit(user.limite_reservas_activas, current);
+        if (enforceLimit) enforceReservationLimit(user.limite_reservas_activas, current);
         if (!user.id_sede) throw Object.assign(new Error('El empleado no tiene una sede asignada.'), { statusCode: 409 });
         if (!user.id_empresa) throw Object.assign(new Error('La sede del empleado no pertenece a una empresa activa.'), { statusCode: 409 });
         const vehicle = (await client.query(`SELECT id,tipo_vehiculo::text tipo_vehiculo FROM vehiculos WHERE id=$1 AND id_usuario=$2 AND COALESCE("Borrado",false)=false`, [entity.id_vehiculo,user.id])).rows[0];
@@ -51,9 +53,10 @@ export default class ReservaRepository {
         // y guardan hora local de Argentina. Comparar naive-vs-naive (los casts
         // ::timestamptz promueven el naive usando el timezone de la sesion de
         // Supabase (UTC) y corrian los solapes 3 horas).
-        const active = `COALESCE("Borrado",false)=false AND (estado_reserva='confirmada' OR (estado_reserva='pendiente_pago' AND retencion_pago_hasta>NOW())) AND fecha_entrada<$2::timestamp AND fecha_salida>$1::timestamp`;
-        if ((await client.query(`SELECT 1 FROM reservas WHERE (id_usuario=$3 OR id_vehiculo=$4) AND ${active} LIMIT 1`, [entity.fecha_entrada,entity.fecha_salida,user.id,vehicle.id])).rowCount) throw Object.assign(new Error('El empleado o vehiculo ya tiene una reserva en ese intervalo.'), { statusCode: 409 });
-        const counts = (await client.query(`SELECT COUNT(*) FILTER (WHERE id_trato=$4)::int trato,COUNT(*)::int garage FROM reservas WHERE id_garage=$3 AND ${active}`, [entity.fecha_entrada,entity.fecha_salida,entity.id_garage,trato.id])).rows[0];
+        const active = `COALESCE("Borrado",false)=false AND (estado_reserva='confirmada' OR (estado_reserva='pendiente_pago' AND retencion_pago_hasta>NOW())) AND fecha_entrada<$2::timestamp AND fecha_salida>$1::timestamp AND ($5::bigint IS NULL OR id<>$5)`;
+        if ((await client.query(`SELECT 1 FROM reservas WHERE (id_usuario=$3 OR id_vehiculo=$4) AND ${active} LIMIT 1`, [entity.fecha_entrada,entity.fecha_salida,user.id,vehicle.id,excludeId])).rowCount) throw Object.assign(new Error('El empleado o vehiculo ya tiene una reserva en ese intervalo.'), { statusCode: 409 });
+        // El cupo lo ocupan las reservas dentro del cupo; las "extra" ya lo excedieron y no lo consumen.
+        const counts = (await client.query(`SELECT COUNT(*) FILTER (WHERE id_trato=$4 AND tipo_cupo IS DISTINCT FROM 'extra')::int trato,COUNT(*)::int garage FROM reservas WHERE id_garage=$3 AND ${active}`, [entity.fecha_entrada,entity.fecha_salida,entity.id_garage,trato.id,excludeId])).rows[0];
         if (Number(counts.garage)>=Number(garage.capacidad)) throw Object.assign(new Error('El garage no tiene capacidad general disponible.'), { statusCode: 409 });
         const tipoCupo = Number(counts.trato)<Number(trato.cantidad_cocheras)?'dentro_cupo':'extra';
         const responsable = trato.modalidad_pago==='empresa_cubre_cupo'&&tipoCupo==='dentro_cupo'?'empresa':'empleado';
@@ -62,6 +65,13 @@ export default class ReservaRepository {
         if (!column||!Number.isFinite(tarifa)||tarifa<0) throw Object.assign(new Error('El trato no tiene una tarifa valida para el vehiculo.'), { statusCode: 409 });
         const minutos=Math.round((new Date(entity.fecha_salida)-new Date(entity.fecha_entrada))/60000);
         const importe=Number((tarifa*minutos/60).toFixed(2));
+        return { user, vehicle, trato, tipoCupo, responsable, tarifa, minutos, importe, politicaReservas };
+    };
+
+    quoteAndCreateWithClientAsync = async (entity, client, insert = true) => {
+        await this.expirePendingAsync(client);
+        const { user, vehicle, trato, tipoCupo, responsable, tarifa, minutos, importe, politicaReservas } =
+            await this._quoteWithClientAsync(entity, client, { lockUser: insert, enforceLimit: insert });
         const snap={id_trato:trato.id,modalidad_pago_aplicada:trato.modalidad_pago,tipo_cupo:tipoCupo,responsable_pago:responsable,tarifa_hora_aplicada:tarifa,importe_estimado:importe,estado_reserva:responsable==='empresa'?'confirmada':'pendiente_pago',retencion_pago_hasta:responsable==='empresa'?null:new Date(Date.now()+600000)};
         if (!insert) return {idTrato:trato.id,modalidadPago:trato.modalidad_pago,tipoCupo,responsablePago:responsable,tipoVehiculo:vehicle.tipo_vehiculo,tarifaHora:tarifa,minutos,importe,requierePago:responsable==='empleado',politicaReservas};
         return withoutQrToken((await client.query(
@@ -102,7 +112,8 @@ export default class ReservaRepository {
     };
 
     // Una edición mantiene su lugar aunque el administrador haya bajado el
-    // límite. No permite cambiar titular ni reactivar reservas no vigentes.
+    // límite. No permite cambiar titular ni reactivar reservas no vigentes, y
+    // vuelve a cotizar con la regla del alta.
     updateWithLimitAsync = async (id, entity) => {
         const client = await pool.connect();
         try {
@@ -118,10 +129,19 @@ export default class ReservaRepository {
             if (!current || Number(current.id_usuario) !== Number(entity.id_usuario) || !current.vigente || current.entro || current.salio) {
                 throw Object.assign(new Error('La reserva ya no puede modificarse ni reactivarse.'), { statusCode: 409 });
             }
+            const quote = await this._quoteWithClientAsync(entity, client, { lockUser: false, excludeId: id });
+            const snap = await this._snapshotForEditAsync(current, quote, client);
             const result = await client.query(
                 `UPDATE reservas SET id_garage=$1, id_vehiculo=$2, fecha_entrada=$3,
-                    fecha_salida=$4, dia=$5 WHERE id=$6 RETURNING *`,
-                [entity.id_garage, entity.id_vehiculo, entity.fecha_entrada, entity.fecha_salida, entity.dia, id]
+                    fecha_salida=$4, dia=$5, id_trato=$6, modalidad_pago_aplicada=$7,
+                    tipo_cupo=$8, responsable_pago=$9, tarifa_hora_aplicada=$10,
+                    importe_estimado=$11, estado_reserva=$12::estado_reserva_enum,
+                    retencion_pago_hasta=$13
+                  WHERE id=$14 RETURNING *`,
+                [entity.id_garage, entity.id_vehiculo, entity.fecha_entrada, entity.fecha_salida, entity.dia,
+                    snap.id_trato, snap.modalidad_pago_aplicada, snap.tipo_cupo, snap.responsable_pago,
+                    snap.tarifa_hora_aplicada, snap.importe_estimado, snap.estado_reserva,
+                    snap.retencion_pago_hasta, id]
             );
             await client.query('COMMIT');
             return withoutQrToken(result.rows[0]);
@@ -131,8 +151,47 @@ export default class ReservaRepository {
         } finally { client.release(); }
     };
 
+    // Decide la "foto" económica de una reserva editada. Si ya se pagó, o si ya
+    // tiene una preferencia de Mercado Pago emitida por su importe, el precio no
+    // puede cambiar: el pago quedaría por otro monto. Lo mismo si la edición la
+    // pasa a cargo del empleado estando confirmada sin pago. En esos casos se
+    // cancela (o se libera la retención) y se vuelve a reservar.
+    _snapshotForEditAsync = async (current, quote, client) => {
+        const snap = {
+            id_trato: quote.trato.id,
+            modalidad_pago_aplicada: quote.trato.modalidad_pago,
+            tipo_cupo: quote.tipoCupo,
+            responsable_pago: quote.responsable,
+            tarifa_hora_aplicada: quote.tarifa,
+            importe_estimado: quote.importe,
+        };
+        const cambia = Number(current.id_trato) !== Number(snap.id_trato) ||
+            current.modalidad_pago_aplicada !== snap.modalidad_pago_aplicada ||
+            current.tipo_cupo !== snap.tipo_cupo ||
+            current.responsable_pago !== snap.responsable_pago ||
+            Number(current.tarifa_hora_aplicada) !== snap.tarifa_hora_aplicada ||
+            Number(current.importe_estimado) !== snap.importe_estimado;
+        const repricing = () => Object.assign(
+            new Error('El cambio modifica el importe o quién paga la reserva. Cancelala y volvé a reservar.'),
+            { statusCode: 409, code: 'RESERVATION_REPRICE_REQUIRED' }
+        );
+
+        if (current.estado_reserva === 'pendiente_pago') {
+            if (cambia && (await client.query('SELECT 1 FROM pagos WHERE id_reserva=$1 LIMIT 1', [current.id])).rowCount) {
+                throw repricing();
+            }
+            return snap.responsable_pago === 'empresa'
+                ? { ...snap, estado_reserva: 'confirmada', retencion_pago_hasta: null }
+                : { ...snap, estado_reserva: 'pendiente_pago', retencion_pago_hasta: current.retencion_pago_hasta };
+        }
+        if (cambia && (current.responsable_pago === 'empleado' || snap.responsable_pago === 'empleado')) {
+            throw repricing();
+        }
+        return { ...snap, estado_reserva: current.estado_reserva, retencion_pago_hasta: null };
+    };
+
     getAllAsync = async (requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const tenant = getTenantCondition(requestingUser, 1, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', ownerColumn: 'r.id_usuario' });
         const result = await pool.query(
             `SELECT r.* FROM reservas r
              INNER JOIN usuarios u ON u.id = r.id_usuario
@@ -171,7 +230,7 @@ export default class ReservaRepository {
     }
 
     getByIdAsync = async (id, requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', ownerColumn: 'r.id_usuario' });
         const result = await pool.query(
             `SELECT r.* FROM reservas r
              INNER JOIN usuarios u ON u.id = r.id_usuario
@@ -218,7 +277,7 @@ export default class ReservaRepository {
     }
 
     getByUsuarioAsync = async (id_usuario, requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', ownerColumn: 'r.id_usuario' });
         const result = await pool.query(
             `SELECT r.* FROM reservas r
              INNER JOIN usuarios u ON u.id = r.id_usuario
@@ -231,7 +290,7 @@ export default class ReservaRepository {
     }
 
     getByUsuarioWithDetailsAsync = async (id_usuario, requestingUser = null) => {
-        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa' });
+        const tenant = getTenantCondition(requestingUser, 2, { sedeColumn: 'u.id_sede', empresaColumn: 'u.id_empresa', ownerColumn: 'r.id_usuario' });
         const result = await pool.query(
             `SELECT
                 r.id,

@@ -9,6 +9,9 @@ import CuentaCorrienteRepository from '../repositories/cuentaCorrienteRepository
 import { authorizeWrite } from '../helpers/writeAuthorization.js';
 import { httpError } from '../helpers/httpError.js';
 
+// Date#getDay: 0 = domingo. Mismos nombres que garage_dias (sin tildes).
+const DIAS_POR_GETDAY = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
+
 export default class ReservaService {
     constructor() {
         console.log('Estoy en: ReservaService.constructor()');
@@ -190,10 +193,13 @@ export default class ReservaService {
     }
 
     createAsync = async (entity, requestingUser) => {
-        entity = { ...entity, id_usuario: requestingUser.id };
+        entity = { ...entity, id_usuario: requestingUser.id, dia: this._diaDeLaSemana(entity.fecha_entrada) };
 
         this._validarCamposObligatorios(entity);
         this._validarFechasAsync(entity);
+        // Mismas reglas de días y horario que la edición (antes el alta no las validaba).
+        const garage = await this.garageService.getByIdAsync(entity.id_garage);
+        if (garage) this._validarHorarioGarage(garage, entity);
 
         const client = await pool.connect();
         try {
@@ -217,7 +223,7 @@ export default class ReservaService {
     }
 
     quoteAsync = async (entity, requestingUser) => {
-        entity = { ...entity, id_usuario: requestingUser.id };
+        entity = { ...entity, id_usuario: requestingUser.id, dia: this._diaDeLaSemana(entity.fecha_entrada) };
         this._validarCamposObligatorios(entity);
         this._validarFechasAsync(entity);
         const client = await pool.connect();
@@ -283,6 +289,7 @@ export default class ReservaService {
         }
 
         const mergedEntity = { ...current, ...entity };
+        mergedEntity.dia = this._diaDeLaSemana(mergedEntity.fecha_entrada);
 
         this._validarCamposObligatorios(mergedEntity);
         await this._validarRelacionesAsync(mergedEntity, requestingUser);
@@ -753,7 +760,27 @@ export default class ReservaService {
         }
 
         this._validarGarageDisponible(garage);
+        this._validarHorarioGarage(garage, entity);
 
+        const capReservas = garage.capacidad_reservas !== null && garage.capacidad_reservas !== undefined
+            ? garage.capacidad_reservas
+            : (garage.capacidad || 0);
+
+        if (capReservas <= 0) {
+            const error = new Error(`El garage no tiene capacidad disponible para reservas.`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        await this._validarOcupacionGarageAsync(garage, capReservas, entity, excludeId);
+    }
+
+    // El día de la semana se deriva de la fecha de entrada: si lo mandara el cliente,
+    // una reserva de un lunes con dia='Sabado' pasaría el control de días hábiles.
+    _diaDeLaSemana = (fecha) => DIAS_POR_GETDAY[new Date(fecha).getDay()];
+
+    // Días y horario de atención del garage. La comparten el alta y la edición.
+    _validarHorarioGarage = (garage, entity) => {
         if (garage.dias && garage.dias.length > 0 && entity.dia && !garage.dias.includes(entity.dia)) {
             const error = new Error(`El garage no esta disponible los ${entity.dia}.`);
             error.statusCode = 400;
@@ -785,17 +812,9 @@ export default class ReservaService {
                 throw error;
             }
         }
+    }
 
-        const capReservas = garage.capacidad_reservas !== null && garage.capacidad_reservas !== undefined
-            ? garage.capacidad_reservas
-            : (garage.capacidad || 0);
-
-        if (capReservas <= 0) {
-            const error = new Error(`El garage no tiene capacidad disponible para reservas.`);
-            error.statusCode = 400;
-            throw error;
-        }
-
+    _validarOcupacionGarageAsync = async (garage, capReservas, entity, excludeId) => {
         const overlapGarage = await this.repo.getOverlapByGarageAsync(
             entity.id_garage,
             entity.fecha_entrada,
