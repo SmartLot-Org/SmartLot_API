@@ -1,2 +1,14 @@
 node_modules/
+
+# Secretos: solo se versiona la plantilla.
 .env
+.env.*
+!.env.example
+
+# Restos de ejecuciones locales que pueden traer datos o sesiones reales.
+*.log
+cookies.txt
+*.cookies
+in
+debug_*.js
+coverage/
